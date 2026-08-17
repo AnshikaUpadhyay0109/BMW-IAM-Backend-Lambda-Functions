@@ -1,0 +1,386 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+
+Description: DIBMW Dealer Analytics — 3-query parallel pipeline + REST API
+
+# ── Parameters ────────────────────────────────────────────────────────────────
+Parameters:
+  Stage:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+
+  AthenaDatabase:
+    Type: String
+    Default: dibmw-dev-sellout
+
+  S3OutputLocation:
+    Type: String
+    Default: s3://dibmw-dev-athena-results-bucket/results/
+
+  ResultsBucket:
+    Type: String
+    Default: dibmw-dev-athena-results-bucket
+
+  CuratedBucket:
+    Type: String
+    Default: dibmw-dev-curated-bucket
+
+  SnsTopicArn:
+    Type: String
+    Default: ""   # provide at deploy time: arn:aws:sns:eu-central-1:<account>:<topic>
+
+# ── Globals ───────────────────────────────────────────────────────────────────
+Globals:
+  Api:
+    Cors:
+      AllowMethods: "'GET,POST,OPTIONS'"
+      AllowHeaders: "'Content-Type,Authorization'"
+      AllowOrigin:  "'*'"
+
+  Function:
+    Runtime: python3.13
+    Timeout: 600          # 10 min — enough for slow Athena queries
+    MemorySize: 256
+    Architectures: [arm64]
+    Layers:
+      - !Ref SharedLayer
+    Environment:
+      Variables:
+        STAGE:              !Ref Stage
+        ATHENA_DATABASE:    !Ref AthenaDatabase
+        ATHENA_REGION:      eu-central-1
+        S3_OUTPUT_LOCATION: !Ref S3OutputLocation
+        RESULTS_BUCKET:     !Ref ResultsBucket
+        SNS_TOPIC_ARN:      !Ref SnsTopicArn
+        PROCESSED_PREFIX:   processed/
+        DEALER_TABLE_NAME:  !Sub dibmw-dealer-cache-${Stage}
+
+# ── Resources ─────────────────────────────────────────────────────────────────
+Resources:
+
+  # ── Lambda Layer (shared code) ─────────────────────────────────────────────
+  SharedLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: !Sub dibmw-shared-${Stage}
+      Description: Shared config + utils for all DIBMW Lambda functions
+      ContentUri: ../shared/
+      CompatibleRuntimes: [python3.12]
+      RetentionPolicy: Delete
+
+  # ── Function 1: ABC Dealer Segmentation ───────────────────────────────────
+  ABCSegmentationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub dibmw-abc-segmentation-${Stage}
+      CodeUri: ../functions/abc_segmentation/
+      Handler: handler.lambda_handler
+      Description: Runs QTD dealer achievement SQL against Athena; returns S3 CSV path
+      Policies:
+        - AmazonAthenaFullAccess
+        - S3ReadPolicy:
+            BucketName: !Ref CuratedBucket
+        - S3WritePolicy:
+            BucketName: !Ref ResultsBucket
+        - Statement:
+            - Effect: Allow
+              Action: [kms:Decrypt, kms:GenerateDataKey]
+              Resource: "*"
+
+  # ── Function 2: MoM Parts Category Decline ────────────────────────────────
+  MoMDeclineFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub dibmw-mom-decline-${Stage}
+      CodeUri: ../functions/mom_decline/
+      Handler: handler.lambda_handler
+      Description: Runs MoM parts category decline SQL against Athena; returns S3 CSV path
+      Policies:
+        - AmazonAthenaFullAccess
+        - S3ReadPolicy:
+            BucketName: !Ref CuratedBucket
+        - S3WritePolicy:
+            BucketName: !Ref ResultsBucket
+        - Statement:
+            - Effect: Allow
+              Action: [kms:Decrypt, kms:GenerateDataKey]
+              Resource: "*"
+
+  # ── Function 3: YoY Parts Category Comparison ─────────────────────────────
+  YoYComparisonFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub dibmw-yoy-comparison-${Stage}
+      CodeUri: ../functions/yoy_comparison/
+      Handler: handler.lambda_handler
+      Description: Runs YoY parts category comparison SQL against Athena; returns S3 CSV path
+      Policies:
+        - AmazonAthenaFullAccess
+        - S3ReadPolicy:
+            BucketName: !Ref CuratedBucket
+        - S3WritePolicy:
+            BucketName: !Ref ResultsBucket
+        - Statement:
+            - Effect: Allow
+              Action: [kms:Decrypt, kms:GenerateDataKey]
+              Resource: "*"
+
+  # ── DynamoDB Table 1: per-dealer KPI cache (swept/overwritten each run) ───
+  DealerCacheTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub dibmw-dealer-cache-${Stage}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: dealer_code
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: dealer_code
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+
+  # ── Function 4: Result Aggregator ─────────────────────────────────────────
+  ResultAggregatorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub dibmw-result-aggregator-${Stage}
+      CodeUri: ../functions/result_aggregator/
+      Handler: handler.lambda_handler
+      Description: Reads all 3 Athena CSVs, writes S3 archive + per-dealer DynamoDB items
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref ResultsBucket
+        - S3WritePolicy:
+            BucketName: !Ref ResultsBucket
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DealerCacheTable
+
+  # ── Function 5: Report Dispatcher ─────────────────────────────────────────
+  ReportDispatcherFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub dibmw-report-dispatcher-${Stage}
+      CodeUri: ../functions/report_dispatcher/
+      Handler: handler.lambda_handler
+      Description: Reads combined JSON, builds 3-section report, publishes to SNS
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref ResultsBucket
+        - Statement:
+            - Effect: Allow
+              Action: sns:Publish
+              Resource: "*"   # scope to !Ref SnsTopicArn once the topic exists
+
+  # ── Function 6: API Handler ────────────────────────────────────────────────
+  ApiHandlerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub dibmw-api-handler-${Stage}
+      CodeUri: ../functions/api_handler/
+      Handler: handler.lambda_handler
+      Description: REST API — reads latest S3 results and optionally triggers the pipeline
+      Timeout: 10       # S3 reads are fast; override the global 300s
+      Environment:
+        Variables:
+          PIPELINE_ARN: !GetAtt AnalyticsPipeline.Arn
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref ResultsBucket
+        - DynamoDBReadPolicy:
+            TableName: !Ref DealerCacheTable
+        - Statement:
+            - Effect: Allow
+              Action: states:StartExecution
+              Resource: !GetAtt AnalyticsPipeline.Arn
+      Events:
+        GetAllDealers:
+          Type: Api
+          Properties:
+            Path: /dealers
+            Method: GET
+        GetDealer:
+          Type: Api
+          Properties:
+            Path: /dealers/{dealer_code}
+            Method: GET
+        GetAll:
+          Type: Api
+          Properties:
+            Path: /results
+            Method: GET
+        GetABC:
+          Type: Api
+          Properties:
+            Path: /results/abc-segmentation
+            Method: GET
+        GetMoM:
+          Type: Api
+          Properties:
+            Path: /results/mom-decline
+            Method: GET
+        GetYoY:
+          Type: Api
+          Properties:
+            Path: /results/yoy-comparison
+            Method: GET
+        TriggerPipeline:
+          Type: Api
+          Properties:
+            Path: /trigger
+            Method: POST
+
+  # ── Step Functions: Parallel pipeline ─────────────────────────────────────
+  AnalyticsPipeline:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: !Sub dibmw-analytics-pipeline-${Stage}
+      Definition:
+        Comment: "Runs 3 Athena queries in parallel → aggregates → dispatches report"
+        StartAt: RunQueriesInParallel
+        States:
+
+          # All 3 query Lambdas fire simultaneously; Step Functions waits for all
+          RunQueriesInParallel:
+            Type: Parallel
+            Branches:
+              - StartAt: ABCSegmentation
+                States:
+                  ABCSegmentation:
+                    Type: Task
+                    Resource: !GetAtt ABCSegmentationFunction.Arn
+                    End: true
+                    Retry:
+                      - ErrorEquals: [States.TaskFailed]
+                        IntervalSeconds: 5
+                        MaxAttempts: 2
+                        BackoffRate: 2
+              - StartAt: MoMDecline
+                States:
+                  MoMDecline:
+                    Type: Task
+                    Resource: !GetAtt MoMDeclineFunction.Arn
+                    End: true
+                    Retry:
+                      - ErrorEquals: [States.TaskFailed]
+                        IntervalSeconds: 5
+                        MaxAttempts: 2
+                        BackoffRate: 2
+              - StartAt: YoYComparison
+                States:
+                  YoYComparison:
+                    Type: Task
+                    Resource: !GetAtt YoYComparisonFunction.Arn
+                    End: true
+                    Retry:
+                      - ErrorEquals: [States.TaskFailed]
+                        IntervalSeconds: 5
+                        MaxAttempts: 2
+                        BackoffRate: 2
+            # Output: ordered array of the 3 branch results → input to ResultAggregator
+            Catch:
+              - ErrorEquals: [States.ALL]
+                Next: PipelineFailed
+            Next: ResultAggregator
+
+          ResultAggregator:
+            Type: Task
+            Resource: !GetAtt ResultAggregatorFunction.Arn
+            Next: ReportDispatcher
+            Retry:
+              - ErrorEquals: [States.TaskFailed]
+                IntervalSeconds: 5
+                MaxAttempts: 2
+                BackoffRate: 2
+            Catch:
+              - ErrorEquals: [States.ALL]
+                Next: PipelineFailed
+
+          ReportDispatcher:
+            Type: Task
+            Resource: !GetAtt ReportDispatcherFunction.Arn
+            End: true
+            Retry:
+              - ErrorEquals: [States.TaskFailed]
+                IntervalSeconds: 5
+                MaxAttempts: 2
+                BackoffRate: 2
+            Catch:
+              - ErrorEquals: [States.ALL]
+                Next: PipelineFailed
+
+          PipelineFailed:
+            Type: Fail
+            Error: PipelineError
+            Cause: "One or more pipeline steps failed — check CloudWatch Logs"
+
+      # Step Functions needs permission to invoke all 5 Lambdas
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ABCSegmentationFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref MoMDeclineFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref YoYComparisonFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ResultAggregatorFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ReportDispatcherFunction
+
+  # ── EventBridge: trigger pipeline every weekday at 07:00 UTC ──────────────
+  DailySchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: !Sub dibmw-analytics-daily-${Stage}
+      ScheduleExpression: "cron(0 7 ? * MON-FRI *)"
+      FlexibleTimeWindow:
+        Mode: "OFF"
+      Target:
+        Arn: !GetAtt AnalyticsPipeline.Arn
+        RoleArn: !GetAtt SchedulerRole.Arn
+        Input: "{}"
+
+  SchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StartExecution
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: states:StartExecution
+                Resource: !GetAtt AnalyticsPipeline.Arn
+
+# ── Outputs ───────────────────────────────────────────────────────────────────
+Outputs:
+  ApiBaseUrl:
+    Description: "Base URL for the REST API — paste this into your frontend"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod"
+
+  DealerCacheTableName:
+    Description: "DynamoDB table — query by dealer_code for instant per-dealer lookup"
+    Value: !Ref DealerCacheTable
+
+  ABCSegmentationArn:
+    Value: !GetAtt ABCSegmentationFunction.Arn
+  MoMDeclineArn:
+    Value: !GetAtt MoMDeclineFunction.Arn
+  YoYComparisonArn:
+    Value: !GetAtt YoYComparisonFunction.Arn
+  ResultAggregatorArn:
+    Value: !GetAtt ResultAggregatorFunction.Arn
+  ReportDispatcherArn:
+    Value: !GetAtt ReportDispatcherFunction.Arn
+  PipelineArn:
+    Value: !GetAtt AnalyticsPipeline.Arn
