@@ -22,15 +22,15 @@ WITH months AS (
 category_list AS (
     SELECT * FROM (
         VALUES
-              (1,  'Comfort and Safety (Accessories)')
-            , (2,  'Transport Solutions (Accessories)')
-            , (3,  'Special Cases Parts')
-            , (4,  'Maintenance')
-            , (5,  'Motorsport')
-            , (6,  'Accident')
-            , (7,  'BMW Group Classic - Motorcycle')
-            , (8,  'BMW Group Classic - Automobile')
-            , (9,  'Repair')
+              (1, 'Comfort and Safety (Accessories)')
+            , (2, 'Transport Solutions (Accessories)')
+            , (3, 'Special Cases Parts')
+            , (4, 'Maintenance')
+            , (5, 'Motorsport')
+            , (6, 'Accident')
+            , (7, 'BMW Group Classic - Motorcycle')
+            , (8, 'BMW Group Classic - Automobile')
+            , (9, 'Repair')
             , (10, 'Wheels and Tires')
             , (11, 'Exterior Design (Accessories)')
             , (12, 'Motorcycle Equipment')
@@ -43,11 +43,12 @@ category_list AS (
 ),
 
 dealer_list AS (
-    SELECT DISTINCT s.dealer_code
-    FROM "dibmw-dev-sellout"."sellout_view" s
-    INNER JOIN months m
-        ON s.invoice_date >= m.month_start
-       AND s.invoice_date <  m.month_end
+    SELECT * FROM (
+        VALUES
+              ('21125'), ('11380'), ('35955'), ('33400'),
+              ('40477'), ('6057'),  ('30864'), ('9118'),
+              ('28965'), ('33160')
+    ) AS t(dealer_code)
 ),
 
 sales_agg AS (
@@ -90,9 +91,9 @@ complete_sales AS (
     CROSS JOIN months m
     CROSS JOIN category_list c
     LEFT JOIN sales_agg a
-        ON d.dealer_code          = a.dealer_code
-       AND m.month_offset         = a.month_offset
-       AND c.aftersales_category  = a.aftersales_category
+        ON d.dealer_code = a.dealer_code
+       AND m.month_offset = a.month_offset
+       AND c.aftersales_category = a.aftersales_category
 ),
 
 category_month_summary AS (
@@ -100,9 +101,11 @@ category_month_summary AS (
           dealer_code
         , category_order
         , aftersales_category
+
         , SUM(CASE WHEN month_offset = 4 THEN sales_amount ELSE 0 END) AS apr_sales
         , SUM(CASE WHEN month_offset = 3 THEN sales_amount ELSE 0 END) AS may_sales
         , SUM(CASE WHEN month_offset = 2 THEN sales_amount ELSE 0 END) AS jun_sales
+
         , ARRAY_JOIN(
               ARRAY[
                     CAST(ROUND(SUM(CASE WHEN month_offset = 4 THEN sales_amount ELSE 0 END), 2) AS varchar)
@@ -111,31 +114,37 @@ category_month_summary AS (
               ],
               ', '
           ) AS sales_apr_may_jun
+
     FROM complete_sales
     WHERE month_offset IN (2, 3, 4)
-    GROUP BY dealer_code, category_order, aftersales_category
+    GROUP BY
+          dealer_code
+        , category_order
+        , aftersales_category
 ),
 
 pivoted_dealer AS (
     SELECT
           dealer_code
-        , MAX(CASE WHEN aftersales_category = 'Comfort and Safety (Accessories)'    THEN sales_apr_may_jun END) AS ComfortSafetyAccessories
-        , MAX(CASE WHEN aftersales_category = 'Transport Solutions (Accessories)'   THEN sales_apr_may_jun END) AS TransportSolutionsAccessories
-        , MAX(CASE WHEN aftersales_category = 'Special Cases Parts'                 THEN sales_apr_may_jun END) AS SpecialCasesParts
-        , MAX(CASE WHEN aftersales_category = 'Maintenance'                         THEN sales_apr_may_jun END) AS Maintenance
-        , MAX(CASE WHEN aftersales_category = 'Motorsport'                          THEN sales_apr_may_jun END) AS Motorsport
-        , MAX(CASE WHEN aftersales_category = 'Accident'                            THEN sales_apr_may_jun END) AS Accident
-        , MAX(CASE WHEN aftersales_category = 'BMW Group Classic - Motorcycle'      THEN sales_apr_may_jun END) AS BMWGroupClassicMotorcycle
-        , MAX(CASE WHEN aftersales_category = 'BMW Group Classic - Automobile'      THEN sales_apr_may_jun END) AS BMWGroupClassicAutomobile
-        , MAX(CASE WHEN aftersales_category = 'Repair'                              THEN sales_apr_may_jun END) AS Repair
-        , MAX(CASE WHEN aftersales_category = 'Wheels and Tires'                    THEN sales_apr_may_jun END) AS WheelsAndTires
-        , MAX(CASE WHEN aftersales_category = 'Exterior Design (Accessories)'       THEN sales_apr_may_jun END) AS ExteriorDesignAccessories
-        , MAX(CASE WHEN aftersales_category = 'Motorcycle Equipment'                THEN sales_apr_may_jun END) AS MotorcycleEquipment
-        , MAX(CASE WHEN aftersales_category = 'Electronics'                         THEN sales_apr_may_jun END) AS Electronics
-        , MAX(CASE WHEN aftersales_category = 'Wear'                                THEN sales_apr_may_jun END) AS Wear
-        , MAX(CASE WHEN aftersales_category = 'Small Parts'                         THEN sales_apr_may_jun END) AS SmallParts
-        , MAX(CASE WHEN aftersales_category = 'Chemical Products (Accessories)'     THEN sales_apr_may_jun END) AS ChemicalProductsAccessories
-        , MAX(CASE WHEN aftersales_category = 'Unknown'                             THEN sales_apr_may_jun END) AS Unknown
+
+        , MAX(CASE WHEN aftersales_category = 'Comfort and Safety (Accessories)' THEN sales_apr_may_jun END) AS ComfortSafetyAccessories
+        , MAX(CASE WHEN aftersales_category = 'Transport Solutions (Accessories)' THEN sales_apr_may_jun END) AS TransportSolutionsAccessories
+        , MAX(CASE WHEN aftersales_category = 'Special Cases Parts' THEN sales_apr_may_jun END) AS SpecialCasesParts
+        , MAX(CASE WHEN aftersales_category = 'Maintenance' THEN sales_apr_may_jun END) AS Maintenance
+        , MAX(CASE WHEN aftersales_category = 'Motorsport' THEN sales_apr_may_jun END) AS Motorsport
+        , MAX(CASE WHEN aftersales_category = 'Accident' THEN sales_apr_may_jun END) AS Accident
+        , MAX(CASE WHEN aftersales_category = 'BMW Group Classic - Motorcycle' THEN sales_apr_may_jun END) AS BMWGroupClassicMotorcycle
+        , MAX(CASE WHEN aftersales_category = 'BMW Group Classic - Automobile' THEN sales_apr_may_jun END) AS BMWGroupClassicAutomobile
+        , MAX(CASE WHEN aftersales_category = 'Repair' THEN sales_apr_may_jun END) AS Repair
+        , MAX(CASE WHEN aftersales_category = 'Wheels and Tires' THEN sales_apr_may_jun END) AS WheelsAndTires
+        , MAX(CASE WHEN aftersales_category = 'Exterior Design (Accessories)' THEN sales_apr_may_jun END) AS ExteriorDesignAccessories
+        , MAX(CASE WHEN aftersales_category = 'Motorcycle Equipment' THEN sales_apr_may_jun END) AS MotorcycleEquipment
+        , MAX(CASE WHEN aftersales_category = 'Electronics' THEN sales_apr_may_jun END) AS Electronics
+        , MAX(CASE WHEN aftersales_category = 'Wear' THEN sales_apr_may_jun END) AS Wear
+        , MAX(CASE WHEN aftersales_category = 'Small Parts' THEN sales_apr_may_jun END) AS SmallParts
+        , MAX(CASE WHEN aftersales_category = 'Chemical Products (Accessories)' THEN sales_apr_may_jun END) AS ChemicalProductsAccessories
+        , MAX(CASE WHEN aftersales_category = 'Unknown' THEN sales_apr_may_jun END) AS Unknown
+
     FROM category_month_summary
     GROUP BY dealer_code
 ),
@@ -148,10 +157,12 @@ sales_with_previous_month AS (
         , category_order
         , aftersales_category
         , sales_amount AS current_month_sales
+
         , LAG(sales_amount) OVER (
               PARTITION BY dealer_code, aftersales_category
               ORDER BY month_offset DESC
           ) AS previous_month_sales
+
     FROM complete_sales
 ),
 
@@ -160,14 +171,17 @@ decline_calc AS (
           dealer_code
         , category_order
         , aftersales_category
+
         , SUM(
               CASE
                   WHEN previous_month_sales IS NOT NULL
                    AND previous_month_sales > 0
                    AND current_month_sales < previous_month_sales
-                  THEN 1 ELSE 0
+                  THEN 1
+                  ELSE 0
               END
           ) AS decline_month_count
+
         , AVG(
               CASE
                   WHEN previous_month_sales IS NOT NULL
@@ -176,14 +190,20 @@ decline_calc AS (
                   THEN 100.0 * (previous_month_sales - current_month_sales) / previous_month_sales
               END
           ) AS avg_decline_pct
+
     FROM sales_with_previous_month
     WHERE month_offset IN (2, 3, 4)
-    GROUP BY dealer_code, category_order, aftersales_category
+
+    GROUP BY
+          dealer_code
+        , category_order
+        , aftersales_category
 ),
 
 decline_flags AS (
     SELECT
           dealer_code
+
         , ARRAY_JOIN(
               ARRAY_AGG(
                   aftersales_category || ': ' || CAST(ROUND(avg_decline_pct, 2) AS varchar) || '%'
@@ -191,6 +211,7 @@ decline_flags AS (
               ),
               ', '
           ) AS Categories_With_Decline_Pct
+
     FROM decline_calc
     WHERE decline_month_count >= 2
     GROUP BY dealer_code
@@ -198,6 +219,7 @@ decline_flags AS (
 
 SELECT
       p.dealer_code
+
     , p.ComfortSafetyAccessories
     , p.TransportSolutionsAccessories
     , p.SpecialCasesParts
@@ -215,10 +237,14 @@ SELECT
     , p.SmallParts
     , p.ChemicalProductsAccessories
     , p.Unknown
+
     , COALESCE(d.Categories_With_Decline_Pct, 'None') AS Categories_With_Decline_Pct
+
 FROM pivoted_dealer p
-LEFT JOIN decline_flags d ON p.dealer_code = d.dealer_code
-ORDER BY p.dealer_code
+LEFT JOIN decline_flags d
+    ON p.dealer_code = d.dealer_code
+ORDER BY
+    p.dealer_code;
 """
 
 athena = boto3.client("athena", region_name=ATHENA_REGION)
@@ -229,6 +255,7 @@ def _run_athena_query(sql: str) -> str:
         QueryString=sql,
         QueryExecutionContext={"Database": ATHENA_DATABASE},
         ResultConfiguration={"OutputLocation": S3_OUTPUT_LOCATION},
+        WorkGroup=os.environ.get("ATHENA_WORKGROUP", "primary"),
     )
     execution_id = response["QueryExecutionId"]
     print(f"[mom_decline] Query submitted → {execution_id}")

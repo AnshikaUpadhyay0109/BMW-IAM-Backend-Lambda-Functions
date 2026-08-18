@@ -22,4 +22,4 @@ DEALER_TABLE_NAME   = os.environ.get("DEALER_TABLE_NAME",   "dibmw-dealer-cache-
 # ── Step Functions / Orchestration ────────────────────────────────────────────
 # Each Lambda returns a status so Step Functions (or the next Lambda) can chain
 POLL_INTERVAL_SEC   = int(os.environ.get("POLL_INTERVAL_SEC", "5"))
-MAX_POLL_ATTEMPTS   = int(os.environ.get("MAX_POLL_ATTEMPTS", "110"))  # ~9 min max
+MAX_POLL_ATTEMPTS   = int(os.environ.get("MAX_POLL_ATTEMPTS", "170"))  # ~14 min max (850s, within 900s Lambda timeout)

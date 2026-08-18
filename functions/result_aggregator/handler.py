@@ -232,60 +232,76 @@ def lambda_handler(event, context):
     print(f"[result_aggregator] Received {len(event)} branch results")
 
     try:
-        # event = Parallel state output (ordered list, one item per branch)
+        # Collect only successful branches — skip any that returned an error payload
         results_by_name: dict = {}
+        failed_queries: list  = []
         for item in event:
             body = item.get("body", item)
             if isinstance(body, str):
                 body = json.loads(body)
-            results_by_name[body["query_name"]] = body
+            if "query_name" in body and item.get("statusCode", 200) == 200:
+                results_by_name[body["query_name"]] = body
+            else:
+                failed_queries.append(body.get("error", str(body)))
 
-        print(f"[result_aggregator] Processing queries: {list(results_by_name.keys())}")
+        print(f"[result_aggregator] Succeeded: {list(results_by_name.keys())}")
+        if failed_queries:
+            print(f"[result_aggregator] Skipped (failed): {failed_queries}")
 
-        abc_rows = _read_csv(results_by_name["abc_segmentation"]["output_s3_path"])
-        mom_rows = _read_csv(results_by_name["mom_decline"]["output_s3_path"])
-        yoy_rows = _read_csv(results_by_name["yoy_comparison"]["output_s3_path"])
+        if not results_by_name:
+            return error_response("result_aggregator failed: all branches failed, nothing to aggregate")
 
-        # ── S3: aggregate summaries (report + archive) ────────────────────────
-        abc_data = _process_abc(abc_rows)
-        mom_data = _process_mom(mom_rows)
-        yoy_data = _process_yoy(yoy_rows)
+        # Read CSVs only for branches that succeeded
+        abc_rows = _read_csv(results_by_name["abc_segmentation"]["output_s3_path"]) \
+                   if "abc_segmentation" in results_by_name else []
+        mom_rows = _read_csv(results_by_name["mom_decline"]["output_s3_path"]) \
+                   if "mom_decline" in results_by_name else []
+        yoy_rows = _read_csv(results_by_name["yoy_comparison"]["output_s3_path"]) \
+                   if "yoy_comparison" in results_by_name else []
 
-        combined  = {
+        abc_data = _process_abc(abc_rows) if abc_rows else None
+        mom_data = _process_mom(mom_rows) if mom_rows else None
+        yoy_data = _process_yoy(yoy_rows) if yoy_rows else None
+
+        combined = {
             "processed_at":     datetime.now(timezone.utc).isoformat(),
+            "partial":          bool(failed_queries),
+            "failed_queries":   failed_queries,
             "abc_segmentation": abc_data,
             "mom_decline":      mom_data,
             "yoy_comparison":   yoy_data,
         }
-        payload   = json.dumps(combined, ensure_ascii=False)
-        exec_id   = results_by_name["abc_segmentation"]["query_execution_id"]
+        payload = json.dumps(combined, ensure_ascii=False)
 
-        s3.put_object(                          # timestamped archive
+        # Use the first successful query's exec_id for the archive key
+        exec_id = next(iter(results_by_name.values()))["query_execution_id"]
+
+        s3.put_object(
             Bucket=RESULTS_BUCKET,
             Key=f"{PROCESSED_PREFIX}{exec_id}_combined_processed.json",
             Body=payload, ContentType="application/json",
         )
-        s3.put_object(                          # fixed "latest" key for legacy /results API
+        s3.put_object(
             Bucket=RESULTS_BUCKET,
             Key=f"{PROCESSED_PREFIX}latest_combined.json",
             Body=payload, ContentType="application/json",
         )
         print(f"[result_aggregator] S3 writes complete")
 
-        # ── DynamoDB: one item per dealer (SK=LATEST, overwrites previous run) ─
+        # DynamoDB: only write dealers from whichever queries succeeded
         run_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         _write_to_dynamodb(
-            _abc_by_dealer(abc_rows),
-            _mom_by_dealer(mom_rows),
-            _yoy_by_dealer(yoy_rows),
+            _abc_by_dealer(abc_rows) if abc_rows else {},
+            _mom_by_dealer(mom_rows) if mom_rows else {},
+            _yoy_by_dealer(yoy_rows) if yoy_rows else {},
             run_date,
         )
 
         return success_response({
-            "message":                  "All results aggregated successfully",
-            "processed_s3_key":         f"{PROCESSED_PREFIX}{exec_id}_combined_processed.json",
-            "total_dealers_written":    abc_data["total_dealers"],
-            "dealers_with_mom_decline": mom_data["dealers_with_declines"],
+            "message":          "partial" if failed_queries else "All results aggregated successfully",
+            "processed_s3_key": f"{PROCESSED_PREFIX}{exec_id}_combined_processed.json",
+            "succeeded":        list(results_by_name.keys()),
+            "failed":           failed_queries,
         })
 
     except Exception as exc:

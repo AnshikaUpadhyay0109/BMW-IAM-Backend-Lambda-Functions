@@ -40,7 +40,7 @@ Globals:
 
   Function:
     Runtime: python3.13
-    Timeout: 600          # 10 min — enough for slow Athena queries
+    Timeout: 900          # 15 min max — for slow mom_decline Athena query
     MemorySize: 256
     Architectures: [arm64]
     Layers:
@@ -51,10 +51,13 @@ Globals:
         ATHENA_DATABASE:    !Ref AthenaDatabase
         ATHENA_REGION:      eu-central-1
         S3_OUTPUT_LOCATION: !Ref S3OutputLocation
+        ATHENA_WORKGROUP:   primary
         RESULTS_BUCKET:     !Ref ResultsBucket
         SNS_TOPIC_ARN:      !Ref SnsTopicArn
         PROCESSED_PREFIX:   processed/
         DEALER_TABLE_NAME:  !Sub dibmw-dealer-cache-${Stage}
+        POLL_INTERVAL_SEC:  "5"
+        MAX_POLL_ATTEMPTS:  "160"
 
 # ── Resources ─────────────────────────────────────────────────────────────────
 Resources:
@@ -186,7 +189,8 @@ Resources:
       Timeout: 10       # S3 reads are fast; override the global 300s
       Environment:
         Variables:
-          PIPELINE_ARN: !GetAtt AnalyticsPipeline.Arn
+          PIPELINE_ARN:   !GetAtt AnalyticsPipeline.Arn
+          API_ROOT_PATH:  /Prod
       Policies:
         - S3ReadPolicy:
             BucketName: !Ref ResultsBucket
@@ -232,6 +236,11 @@ Resources:
           Properties:
             Path: /trigger
             Method: POST
+        ProxyAll:
+          Type: Api
+          Properties:
+            Path: /{proxy+}
+            Method: ANY
 
   # ── Step Functions: Parallel pipeline ─────────────────────────────────────
   AnalyticsPipeline:

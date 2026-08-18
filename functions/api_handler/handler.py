@@ -141,5 +141,7 @@ def trigger_pipeline():
 
 
 # ── Mangum adapter — translates API Gateway events ↔ FastAPI/ASGI ─────────────
-# lifespan="off" because Lambda is stateless; startup/shutdown hooks don't apply
-lambda_handler = Mangum(app, lifespan="off")
+# api_gateway_base_path sets ASGI root_path so Swagger UI fetches /Prod/openapi.json
+# instead of /openapi.json, which 403s at API Gateway without the stage prefix.
+# lifespan="off" because Lambda is stateless; startup/shutdown hooks don't apply.
+lambda_handler = Mangum(app, lifespan="off", api_gateway_base_path=os.environ.get("API_ROOT_PATH", "/Prod"))
