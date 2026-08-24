@@ -63,6 +63,11 @@ base AS (
 
     FROM "dibmw-dev-sellout"."sellout_view"
     CROSS JOIN params
+    WHERE dealer_code IN (
+        '21125','11380','35955','33400',
+        '40477','6057','30864','9118',
+        '28965','33160'
+    )
     GROUP BY dealer_code
 )
 
@@ -96,6 +101,7 @@ def _run_athena_query(sql: str) -> str:
         QueryString=sql,
         QueryExecutionContext={"Database": ATHENA_DATABASE},
         ResultConfiguration={"OutputLocation": S3_OUTPUT_LOCATION},
+        WorkGroup=os.environ.get("ATHENA_WORKGROUP", "primary"),
     )
     execution_id = response["QueryExecutionId"]
     print(f"[yoy_comparison] Query submitted → {execution_id}")

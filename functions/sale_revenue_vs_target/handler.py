@@ -90,14 +90,14 @@ def _run_athena_query(sql: str) -> str:
         WorkGroup=os.environ.get("ATHENA_WORKGROUP", "primary"),
     )
     execution_id = response["QueryExecutionId"]
-    print(f"[sales_vs_target] Query submitted → {execution_id}")
+    print(f"[sale_revenue_vs_target] Query submitted → {execution_id}")
 
     for attempt in range(MAX_POLL_ATTEMPTS):
         status = athena.get_query_execution(QueryExecutionId=execution_id)
         state = status["QueryExecution"]["Status"]["State"]
         if state in ("SUCCEEDED", "FAILED", "CANCELLED"):
             break
-        print(f"[sales_vs_target] Attempt {attempt + 1}: state={state}, waiting…")
+        print(f"[sale_revenue_vs_target] Attempt {attempt + 1}: state={state}, waiting…")
         time.sleep(POLL_INTERVAL_SEC)
     else:
         raise TimeoutError(f"Query {execution_id} did not complete within the poll limit.")
@@ -110,15 +110,15 @@ def _run_athena_query(sql: str) -> str:
 
 
 def lambda_handler(event, context):
-    log_event("sales_vs_target", event)
+    log_event("sale_revenue_vs_target", event)
     try:
         execution_id   = _run_athena_query(SQL_QUERY)
         output_s3_path = f"{S3_OUTPUT_LOCATION}{execution_id}.csv"
-        print(f"[sales_vs_target] SUCCESS → {output_s3_path}")
+        print(f"[sale_revenue_vs_target] SUCCESS → {output_s3_path}")
         return success_response({
-            "query_name":         "sales_vs_target",
+            "query_name":         "sale_revenue_vs_target",
             "query_execution_id": execution_id,
             "output_s3_path":     output_s3_path,
         })
     except Exception as exc:
-        return error_response(f"sales_vs_target failed: {exc}")
+        return error_response(f"sale_revenue_vs_target failed: {exc}")

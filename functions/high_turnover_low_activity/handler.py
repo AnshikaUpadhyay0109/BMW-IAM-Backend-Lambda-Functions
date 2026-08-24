@@ -11,32 +11,38 @@ from shared.config import (
 from shared.utils import success_response, error_response, log_event
 
 SQL_QUERY = """
-WITH ytd_sales AS (
+WITH base AS (
     SELECT
-        sd.dealer_code,
-        MAX(dm.dealer_name) AS dealer_name,
-        MAX(dm.country) AS country,
-        MAX(sd.sales_actual_YTD) AS ytd_sales
-    FROM "dibmw-dev-sellout"."sellout_agg_dealer" sd
-    LEFT JOIN "dibmw-dev-sellout"."dealer_master" dm
-        ON sd.dealer_code = dm.dealer_code
-    WHERE sd.year = YEAR(current_date)
-      AND sd.sales_actual_YTD IS NOT NULL
-    GROUP BY sd.dealer_code
+        country,
+        dealer_code AS entity_id,
+        SUM(net_amount)                AS turnover,
+        COUNT(DISTINCT invoice_number) AS invoice_count,
+        DATE_DIFF('day', MAX(invoice_date), DATE '2026-06-30') AS recency_days
+    FROM "dibmw-dev-sellout"."sellout_view"
+    WHERE year = 2026
+      AND month IN (4, 5, 6)
+      AND (
+            (country = 'FR' AND dealer_code IN ('21125','11380','35955','33400')) OR
+            (country = 'GR' AND dealer_code IN ('40477','6057','30864','9118'))   OR
+            (country = 'PL' AND dealer_code IN ('28965','33160'))
+          )
+    GROUP BY country, dealer_code
+),
+market_avg AS (
+    SELECT country, AVG(turnover) AS avg_turnover
+    FROM base
+    GROUP BY country
 )
 SELECT
-    dealer_code,
-    dealer_name,
-    country,
-    ROUND(ytd_sales, 0) AS ytd_sales_eur,
-    NTILE(3) OVER (ORDER BY ytd_sales DESC) AS quantile,
-    CASE NTILE(3) OVER (ORDER BY ytd_sales DESC)
-        WHEN 1 THEN 'A'
-        WHEN 2 THEN 'B'
-        WHEN 3 THEN 'C'
-    END AS segment
-FROM ytd_sales
-ORDER BY ytd_sales DESC;
+    b.*,
+    ma.avg_turnover,
+    (b.turnover > ma.avg_turnover)                     AS high_turnover,
+    (b.invoice_count < 2 OR b.recency_days > 30)       AS low_activity,
+    (b.turnover > ma.avg_turnover
+     AND (b.invoice_count < 2 OR b.recency_days > 30)) AS high_turnover_low_activity_flag
+FROM base b
+JOIN market_avg ma ON b.country = ma.country
+ORDER BY b.country, b.turnover DESC
 """
 
 athena = boto3.client("athena", region_name=ATHENA_REGION)
@@ -50,14 +56,14 @@ def _run_athena_query(sql: str) -> str:
         WorkGroup=os.environ.get("ATHENA_WORKGROUP", "primary"),
     )
     execution_id = response["QueryExecutionId"]
-    print(f"[abc_segmentation] Query submitted → {execution_id}")
+    print(f"[high_turnover_low_activity] Query submitted → {execution_id}")
 
     for attempt in range(MAX_POLL_ATTEMPTS):
         status = athena.get_query_execution(QueryExecutionId=execution_id)
         state = status["QueryExecution"]["Status"]["State"]
         if state in ("SUCCEEDED", "FAILED", "CANCELLED"):
             break
-        print(f"[abc_segmentation] Attempt {attempt + 1}: state={state}, waiting…")
+        print(f"[high_turnover_low_activity] Attempt {attempt + 1}: state={state}, waiting…")
         time.sleep(POLL_INTERVAL_SEC)
     else:
         raise TimeoutError(f"Query {execution_id} did not complete within the poll limit.")
@@ -70,15 +76,15 @@ def _run_athena_query(sql: str) -> str:
 
 
 def lambda_handler(event, context):
-    log_event("abc_segmentation", event)
+    log_event("high_turnover_low_activity", event)
     try:
         execution_id   = _run_athena_query(SQL_QUERY)
         output_s3_path = f"{S3_OUTPUT_LOCATION}{execution_id}.csv"
-        print(f"[abc_segmentation] SUCCESS → {output_s3_path}")
+        print(f"[high_turnover_low_activity] SUCCESS → {output_s3_path}")
         return success_response({
-            "query_name":         "abc_segmentation",
+            "query_name":         "high_turnover_low_activity",
             "query_execution_id": execution_id,
             "output_s3_path":     output_s3_path,
         })
     except Exception as exc:
-        return error_response(f"abc_segmentation failed: {exc}")
+        return error_response(f"high_turnover_low_activity failed: {exc}")

@@ -5,6 +5,7 @@ import sys
 from decimal import Decimal
 from typing import Any
 
+from boto3.dynamodb.conditions import Attr
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from mangum import Mangum
@@ -13,18 +14,22 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../"))
 from shared.config import RESULTS_BUCKET, DEALER_TABLE_NAME
 
 # ── AWS clients (module-level — reused across warm Lambda invocations) ─────────
-s3     = boto3.client("s3")
-sfn    = boto3.client("stepfunctions", region_name="eu-central-1")
-dynamo = boto3.resource("dynamodb", region_name="eu-central-1")
+s3             = boto3.client("s3")
+sfn            = boto3.client("stepfunctions", region_name="eu-central-1")
+dynamo         = boto3.resource("dynamodb", region_name="eu-central-1")
+lambda_client  = boto3.client("lambda", region_name="eu-central-1")
 
-LATEST_KEY   = "processed/latest_combined.json"
-PIPELINE_ARN = os.environ.get("PIPELINE_ARN", "")
+LATEST_KEY             = "processed/latest_combined.json"
+PIPELINE_ARN           = os.environ.get("PIPELINE_ARN", "")
+API_ROOT_PATH          = os.environ.get("API_ROOT_PATH", "/Prod")
+INSIGHTS_GENERATOR_ARN = os.environ.get("INSIGHTS_GENERATOR_ARN", "")
 
 # ── FastAPI app ────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="DIBMW Dealer Analytics API",
     description="Per-dealer KPI data from Athena pipelines — ABC segmentation, MoM decline, YoY comparison.",
     version="1.0.0",
+    root_path=API_ROOT_PATH,
 )
 
 app.add_middleware(
@@ -68,11 +73,14 @@ def get_all_dealers():
     Use this for the priority list / overview screen on the frontend.
     """
     table    = dynamo.Table(DEALER_TABLE_NAME)
-    response = table.scan()
+    response = table.scan(FilterExpression=Attr("sk").eq("LATEST"))
     items    = response.get("Items", [])
 
     while "LastEvaluatedKey" in response:
-        response = table.scan(ExclusiveStartKey=response["LastEvaluatedKey"])
+        response = table.scan(
+            FilterExpression=Attr("sk").eq("LATEST"),
+            ExclusiveStartKey=response["LastEvaluatedKey"],
+        )
         items.extend(response.get("Items", []))
 
     return {"total": len(items), "dealers": _decimal_to_float(items)}
@@ -102,7 +110,6 @@ def get_all_results():
     """Returns the full combined JSON written by result_aggregator (all dealers, all KPIs)."""
     return _read_latest_s3()
 
-
 @app.get("/results/abc-segmentation", summary="QTD dealer achievement summary")
 def get_abc():
     data = _read_latest_s3()
@@ -119,6 +126,80 @@ def get_mom():
 def get_yoy():
     data = _read_latest_s3()
     return {"processed_at": data.get("processed_at"), "yoy_comparison": data.get("yoy_comparison")}
+
+
+@app.get("/results/revenue-yoy", summary="CY vs LY MTD dealer revenue comparison")
+def get_revenue_yoy():
+    data = _read_latest_s3()
+    return {"processed_at": data.get("processed_at"), "revenue_yoy": data.get("revenue_yoy")}
+
+
+@app.get("/results/customer-trend", summary="Monthly customer count trend (Apr–Jun) per dealer")
+def get_customer_trend():
+    data = _read_latest_s3()
+    return {"processed_at": data.get("processed_at"), "customer_trend": data.get("customer_trend")}
+
+
+@app.get("/results/high-turnover-low-activity", summary="Dealers with high turnover but low invoice frequency or poor recency")
+def get_high_turnover_low_activity():
+    data = _read_latest_s3()
+    return {"processed_at": data.get("processed_at"), "high_turnover_low_activity": data.get("high_turnover_low_activity")}
+
+
+@app.get("/results/sale-revenue-vs-target", summary="Sale revenue actual vs target per dealer (3-month rolling)")
+def get_sale_revenue_vs_target():
+    data = _read_latest_s3()
+    return {"processed_at": data.get("processed_at"), "sale_revenue_vs_target": data.get("sale_revenue_vs_target")}
+
+
+@app.get("/results/purchase-revenue-vs-target", summary="Purchase revenue actual vs target per dealer (3-month rolling)")
+def get_purchase_revenue_vs_target():
+    data = _read_latest_s3()
+    return {"processed_at": data.get("processed_at"), "purchase_revenue_vs_target": data.get("purchase_revenue_vs_target")}
+
+
+# ── AI Insights ──────────────────────────────────────────────────────────────
+
+@app.get("/dealers/{dealer_code}/insights", summary="Get AI-generated insights for a dealer")
+def get_dealer_insights(dealer_code: str):
+    """
+    Returns top_issues, summary, and pitch for the dealer.
+    Results are cached in DynamoDB (sk=INSIGHTS_LATEST) keyed by run_date.
+    Cache hit: ~200 ms (DynamoDB read). Cache miss: triggers Bedrock generation (~10-20 s).
+    """
+    table = dynamo.Table(DEALER_TABLE_NAME)
+
+    # Fetch KPI record to know the current run_date
+    latest = table.get_item(Key={"dealer_code": dealer_code, "sk": "LATEST"}).get("Item")
+    if not latest:
+        raise HTTPException(status_code=404, detail=f"Dealer '{dealer_code}' not found")
+
+    run_date = latest.get("run_date", "")
+
+    # Return cached insights when run_date still matches
+    cached = table.get_item(Key={"dealer_code": dealer_code, "sk": "INSIGHTS_LATEST"}).get("Item")
+    if cached and cached.get("run_date") == run_date:
+        return _decimal_to_float(cached)
+
+    # Cache miss — invoke the insights generator Lambda synchronously
+    if not INSIGHTS_GENERATOR_ARN:
+        raise HTTPException(status_code=503, detail="INSIGHTS_GENERATOR_ARN not configured")
+
+    resp = lambda_client.invoke(
+        FunctionName=INSIGHTS_GENERATOR_ARN,
+        InvocationType="RequestResponse",
+        Payload=json.dumps({"dealer_code": dealer_code}),
+    )
+
+    if resp.get("FunctionError"):
+        raise HTTPException(status_code=502, detail="Insights generation failed — check InsightsGenerator logs")
+
+    payload = json.loads(resp["Payload"].read())
+    if payload.get("statusCode") != 200:
+        body = json.loads(payload.get("body", "{}"))
+        raise HTTPException(status_code=502, detail=body.get("error", "Insights generation failed"))
+
+    return json.loads(payload["body"])
 
 
 # ── Pipeline trigger ──────────────────────────────────────────────────────────

@@ -30,6 +30,11 @@ Parameters:
     Type: String
     Default: ""   # provide at deploy time: arn:aws:sns:eu-central-1:<account>:<topic>
 
+  BedrockModelId:
+    Type: String
+    Default: "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
+    Description: "Bedrock cross-region inference profile for eu-central-1"
+
 # ── Globals ───────────────────────────────────────────────────────────────────
 Globals:
   Api:
@@ -129,6 +134,101 @@ Resources:
               Action: [kms:Decrypt, kms:GenerateDataKey]
               Resource: "*"
 
+  # ── Function 4: YoY MTD Revenue Comparison ───────────────────────────────
+  RevenueYoYFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub dibmw-revenue-yoy-${Stage}
+      CodeUri: ../functions/revenue_yoy/
+      Handler: handler.lambda_handler
+      Description: Runs CY vs LY MTD revenue comparison SQL against Athena; returns S3 CSV path
+      Policies:
+        - AmazonAthenaFullAccess
+        - S3ReadPolicy:
+            BucketName: !Ref CuratedBucket
+        - S3WritePolicy:
+            BucketName: !Ref ResultsBucket
+        - Statement:
+            - Effect: Allow
+              Action: [kms:Decrypt, kms:GenerateDataKey]
+              Resource: "*"
+
+  # ── Function 5a: Sale Revenue vs Target ──────────────────────────────────
+  SaleRevenueVsTargetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub dibmw-sale-revenue-vs-target-${Stage}
+      CodeUri: ../functions/sale_revenue_vs_target/
+      Handler: handler.lambda_handler
+      Description: Runs sales actual vs target SQL against Athena; returns S3 CSV path
+      Policies:
+        - AmazonAthenaFullAccess
+        - S3ReadPolicy:
+            BucketName: !Ref CuratedBucket
+        - S3WritePolicy:
+            BucketName: !Ref ResultsBucket
+        - Statement:
+            - Effect: Allow
+              Action: [kms:Decrypt, kms:GenerateDataKey]
+              Resource: "*"
+
+  # ── Function 5b: Purchase Revenue vs Target ───────────────────────────────
+  PurchaseRevenueVsTargetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub dibmw-purchase-revenue-vs-target-${Stage}
+      CodeUri: ../functions/purchase_revenue_vs_target/
+      Handler: handler.lambda_handler
+      Description: Runs purchase actual vs target SQL against Athena; returns S3 CSV path
+      Policies:
+        - AmazonAthenaFullAccess
+        - S3ReadPolicy:
+            BucketName: !Ref CuratedBucket
+        - S3WritePolicy:
+            BucketName: !Ref ResultsBucket
+        - Statement:
+            - Effect: Allow
+              Action: [kms:Decrypt, kms:GenerateDataKey]
+              Resource: "*"
+
+  # ── Function 5c: High Turnover Low Activity ──────────────────────────────
+  HighTurnoverLowActivityFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub dibmw-high-turnover-low-activity-${Stage}
+      CodeUri: ../functions/high_turnover_low_activity/
+      Handler: handler.lambda_handler
+      Description: Flags dealers with high turnover but low invoice frequency or poor recency
+      Policies:
+        - AmazonAthenaFullAccess
+        - S3ReadPolicy:
+            BucketName: !Ref CuratedBucket
+        - S3WritePolicy:
+            BucketName: !Ref ResultsBucket
+        - Statement:
+            - Effect: Allow
+              Action: [kms:Decrypt, kms:GenerateDataKey]
+              Resource: "*"
+
+  # ── Function 6: Customer Count Trend ─────────────────────────────────────
+  CustomerTrendFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub dibmw-customer-trend-${Stage}
+      CodeUri: ../functions/customer_trend/
+      Handler: handler.lambda_handler
+      Description: Runs monthly customer count trend SQL against Athena; returns S3 CSV path
+      Policies:
+        - AmazonAthenaFullAccess
+        - S3ReadPolicy:
+            BucketName: !Ref CuratedBucket
+        - S3WritePolicy:
+            BucketName: !Ref ResultsBucket
+        - Statement:
+            - Effect: Allow
+              Action: [kms:Decrypt, kms:GenerateDataKey]
+              Resource: "*"
+
   # ── DynamoDB Table 1: per-dealer KPI cache (swept/overwritten each run) ───
   DealerCacheTable:
     Type: AWS::DynamoDB::Table
@@ -162,6 +262,35 @@ Resources:
         - DynamoDBCrudPolicy:
             TableName: !Ref DealerCacheTable
 
+  # ── Function: Insights Generator ──────────────────────────────────────────
+  InsightsGeneratorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub dibmw-insights-generator-${Stage}
+      CodeUri: ../functions/insights_generator/
+      Handler: handler.lambda_handler
+      Description: Generates AI insights (top_issues, summary, pitch) via Bedrock; caches in DynamoDB
+      Timeout: 60
+      Environment:
+        Variables:
+          BEDROCK_MODEL_ID: !Ref BedrockModelId
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DealerCacheTable
+        - Statement:
+            - Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource:
+                # EU Haiku 4.5 inference profile (entry point)
+                - !Sub "arn:aws:bedrock:eu-central-1:${AWS::AccountId}:inference-profile/eu.anthropic.claude-haiku-4-5-20251001-v1:0"
+                # Foundation models in each region the profile routes to
+                - "arn:aws:bedrock:eu-central-1::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0"
+                - "arn:aws:bedrock:eu-north-1::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0"
+                - "arn:aws:bedrock:eu-west-1::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0"
+                - "arn:aws:bedrock:eu-west-3::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0"
+                - "arn:aws:bedrock:eu-south-1::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0"
+                - "arn:aws:bedrock:eu-south-2::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0"
+
   # ── Function 5: Report Dispatcher ─────────────────────────────────────────
   ReportDispatcherFunction:
     Type: AWS::Serverless::Function
@@ -186,16 +315,19 @@ Resources:
       CodeUri: ../functions/api_handler/
       Handler: handler.lambda_handler
       Description: REST API — reads latest S3 results and optionally triggers the pipeline
-      Timeout: 10       # S3 reads are fast; override the global 300s
+      Timeout: 30       # 30s covers cache-miss Bedrock calls; API Gateway hard limit is 29s
       Environment:
         Variables:
-          PIPELINE_ARN:   !GetAtt AnalyticsPipeline.Arn
-          API_ROOT_PATH:  /Prod
+          PIPELINE_ARN:           !GetAtt AnalyticsPipeline.Arn
+          API_ROOT_PATH:          /Prod
+          INSIGHTS_GENERATOR_ARN: !GetAtt InsightsGeneratorFunction.Arn
       Policies:
         - S3ReadPolicy:
             BucketName: !Ref ResultsBucket
         - DynamoDBReadPolicy:
             TableName: !Ref DealerCacheTable
+        - LambdaInvokePolicy:
+            FunctionName: !Ref InsightsGeneratorFunction
         - Statement:
             - Effect: Allow
               Action: states:StartExecution
@@ -210,6 +342,11 @@ Resources:
           Type: Api
           Properties:
             Path: /dealers/{dealer_code}
+            Method: GET
+        GetDealerInsights:
+          Type: Api
+          Properties:
+            Path: /dealers/{dealer_code}/insights
             Method: GET
         GetAll:
           Type: Api
@@ -230,6 +367,31 @@ Resources:
           Type: Api
           Properties:
             Path: /results/yoy-comparison
+            Method: GET
+        GetRevenueYoY:
+          Type: Api
+          Properties:
+            Path: /results/revenue-yoy
+            Method: GET
+        GetCustomerTrend:
+          Type: Api
+          Properties:
+            Path: /results/customer-trend
+            Method: GET
+        GetHighTurnoverLowActivity:
+          Type: Api
+          Properties:
+            Path: /results/high-turnover-low-activity
+            Method: GET
+        GetSaleRevenueVsTarget:
+          Type: Api
+          Properties:
+            Path: /results/sale-revenue-vs-target
+            Method: GET
+        GetPurchaseRevenueVsTarget:
+          Type: Api
+          Properties:
+            Path: /results/purchase-revenue-vs-target
             Method: GET
         TriggerPipeline:
           Type: Api
@@ -289,7 +451,62 @@ Resources:
                         IntervalSeconds: 5
                         MaxAttempts: 2
                         BackoffRate: 2
-            # Output: ordered array of the 3 branch results → input to ResultAggregator
+              - StartAt: RevenueYoY
+                States:
+                  RevenueYoY:
+                    Type: Task
+                    Resource: !GetAtt RevenueYoYFunction.Arn
+                    End: true
+                    Retry:
+                      - ErrorEquals: [States.TaskFailed]
+                        IntervalSeconds: 5
+                        MaxAttempts: 2
+                        BackoffRate: 2
+              - StartAt: CustomerTrend
+                States:
+                  CustomerTrend:
+                    Type: Task
+                    Resource: !GetAtt CustomerTrendFunction.Arn
+                    End: true
+                    Retry:
+                      - ErrorEquals: [States.TaskFailed]
+                        IntervalSeconds: 5
+                        MaxAttempts: 2
+                        BackoffRate: 2
+              - StartAt: HighTurnoverLowActivity
+                States:
+                  HighTurnoverLowActivity:
+                    Type: Task
+                    Resource: !GetAtt HighTurnoverLowActivityFunction.Arn
+                    End: true
+                    Retry:
+                      - ErrorEquals: [States.TaskFailed]
+                        IntervalSeconds: 5
+                        MaxAttempts: 2
+                        BackoffRate: 2
+              - StartAt: SaleRevenueVsTarget
+                States:
+                  SaleRevenueVsTarget:
+                    Type: Task
+                    Resource: !GetAtt SaleRevenueVsTargetFunction.Arn
+                    End: true
+                    Retry:
+                      - ErrorEquals: [States.TaskFailed]
+                        IntervalSeconds: 5
+                        MaxAttempts: 2
+                        BackoffRate: 2
+              - StartAt: PurchaseRevenueVsTarget
+                States:
+                  PurchaseRevenueVsTarget:
+                    Type: Task
+                    Resource: !GetAtt PurchaseRevenueVsTargetFunction.Arn
+                    End: true
+                    Retry:
+                      - ErrorEquals: [States.TaskFailed]
+                        IntervalSeconds: 5
+                        MaxAttempts: 2
+                        BackoffRate: 2
+            # Output: ordered array of branch results → input to ResultAggregator
             Catch:
               - ErrorEquals: [States.ALL]
                 Next: PipelineFailed
@@ -334,6 +551,16 @@ Resources:
             FunctionName: !Ref MoMDeclineFunction
         - LambdaInvokePolicy:
             FunctionName: !Ref YoYComparisonFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref RevenueYoYFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref CustomerTrendFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref HighTurnoverLowActivityFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref SaleRevenueVsTargetFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref PurchaseRevenueVsTargetFunction
         - LambdaInvokePolicy:
             FunctionName: !Ref ResultAggregatorFunction
         - LambdaInvokePolicy:
@@ -393,3 +620,5 @@ Outputs:
     Value: !GetAtt ReportDispatcherFunction.Arn
   PipelineArn:
     Value: !GetAtt AnalyticsPipeline.Arn
+  InsightsGeneratorArn:
+    Value: !GetAtt InsightsGeneratorFunction.Arn
