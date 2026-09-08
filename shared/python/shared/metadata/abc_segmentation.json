@@ -1,0 +1,75 @@
+{
+  "dataset_name": "Dealer ABC Segmentation",
+  "business_domain": "BMW Independent Aftermarket",
+  "grain": "Dealer",
+  "primary_entity": "Dealer",
+
+  "dataset_description": "Dealer-level ABC segmentation based on year-to-date sales. All dealers are ranked globally by YTD sales and split into three equal tiers: A (top third), B (middle third), C (bottom third). Segmentation is not partitioned by country.",
+
+  "reporting_period_logic": {
+    "ytd_window": "Current year, all months where sales_actual_YTD is not null"
+  },
+
+  "dimensions": {
+    "dealer_code": { "description": "Unique dealer identifier." },
+    "country": { "description": "Market/country of the dealer." }
+  },
+
+  "metrics": {
+    "ytd_sales_eur": {
+      "description": "Year-to-date total sales revenue.",
+      "unit": "EUR",
+      "source": "MAX(sales_actual_YTD)"
+    },
+    "quantile": {
+      "description": "NTILE(3) rank by ytd_sales_eur globally. 1 = top third, 2 = middle third, 3 = bottom third.",
+      "values": [1, 2, 3]
+    },
+    "segment": {
+      "description": "ABC label derived from quantile. A = quantile 1 (top), B = quantile 2 (middle), C = quantile 3 (bottom).",
+      "values": ["A", "B", "C"]
+    }
+  },
+
+  "segment_definitions": {
+    "A": { "condition": "Top third of all dealers by YTD sales — global ranking, not per country." },
+    "B": { "condition": "Middle third of all dealers by YTD sales — global ranking." },
+    "C": { "condition": "Bottom third of all dealers by YTD sales — global ranking." }
+  },
+
+  "alert_conditions": {
+    "segment_c": {
+      "condition": "segment = 'C'",
+      "priority": "High",
+      "meaning": "Dealer is in the bottom third globally by YTD sales."
+    },
+    "segment_a": {
+      "condition": "segment = 'A'",
+      "priority": "Positive",
+      "meaning": "Dealer is a top-third performer globally by YTD sales."
+    }
+  },
+
+  "recommended_insights": [
+    "Dealer ABC segment tier",
+    "YTD sales value supporting the segment",
+    "Segment as context for visit urgency and engagement level"
+  ],
+
+  "talking_point_generation": {
+    "segment_a": "Dealer is a Segment A top performer by YTD sales — a strategic account to protect and grow.",
+    "segment_b": "Dealer is Segment B with potential to move into Segment A through targeted engagement.",
+    "segment_c": "Dealer is Segment C — bottom third globally — and may require focused intervention."
+  },
+
+  "llm_instructions": [
+    "Use segment (A, B, or C) as the primary positioning indicator for the dealer.",
+    "Reference ytd_sales_eur to support the segment label.",
+    "Segmentation is global, not per-country — do not describe it as a country-level comparison.",
+    "Segment A = top third, B = middle third, C = bottom third by YTD sales across all dealers.",
+    "Do not invent reasons for the segment placement.",
+    "Use segment to frame overall visit urgency and engagement approach — Segment C requires more urgency than Segment A.",
+    "Support every statement with actual metric values.",
+    "Generate concise business-focused insights suitable for a sales representative preparing for a dealer discussion."
+  ]
+}

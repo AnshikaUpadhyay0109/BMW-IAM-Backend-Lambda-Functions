@@ -1,0 +1,66 @@
+{
+  "dataset_name": "Dealer Sales Revenue vs Target",
+  "business_domain": "BMW Independent Aftermarket",
+  "grain": "Dealer",
+  "primary_entity": "Dealer",
+
+  "dataset_description": "Dealer-level sales revenue performance against assigned sales targets across the latest three reporting months, including actual sales revenue, target revenue, sales target gaps, and achievement percentages.",
+
+  "reporting_period_logic": {
+    "latest_reporting_month": "Current Date - 2 Months (M1)",
+    "middle_reporting_month": "Current Date - 3 Months (M2)",
+    "oldest_reporting_month": "Current Date - 4 Months (M3)"
+  },
+
+  "dimensions": {
+    "Dealer_ID": { "description": "Unique dealer identifier." },
+    "Dealer_Name": { "description": "Dealer name." }
+  },
+
+  "metrics": {
+    "M1_Actual": { "description": "Actual sales revenue for the latest reporting month (Current Date - 2 Months).", "unit": "EUR", "source": "sales_actual_MTD" },
+    "M1_Target": { "description": "Target sales revenue for the latest reporting month.", "unit": "EUR", "source": "sales_target_MTD" },
+    "M1_Gap_EUR": { "description": "M1_Actual minus M1_Target. Positive = exceeded target, Negative = missed target.", "unit": "EUR" },
+    "M1_AchvPct": { "description": "Sales target achievement percentage for the latest reporting month.", "unit": "%", "formula": "(M1_Actual / M1_Target) * 100" },
+    "M2_Actual": { "description": "Actual sales revenue for the middle reporting month (Current Date - 3 Months).", "unit": "EUR" },
+    "M2_Target": { "description": "Target sales revenue for the middle reporting month.", "unit": "EUR" },
+    "M2_Gap_EUR": { "description": "M2_Actual minus M2_Target.", "unit": "EUR" },
+    "M2_AchvPct": { "description": "Sales target achievement percentage for the middle reporting month.", "unit": "%" },
+    "M3_Actual": { "description": "Actual sales revenue for the oldest reporting month (Current Date - 4 Months).", "unit": "EUR" },
+    "M3_Target": { "description": "Target sales revenue for the oldest reporting month.", "unit": "EUR" },
+    "M3_Gap_EUR": { "description": "M3_Actual minus M3_Target.", "unit": "EUR" },
+    "M3_AchvPct": { "description": "Sales target achievement percentage for the oldest reporting month.", "unit": "%" }
+  },
+
+  "trend_analysis_logic": {
+    "latest_month_priority": "Always prioritize M1 analysis — M1 is the most recent reporting month.",
+    "improving": { "condition": "M1_AchvPct > M2_AchvPct AND M2_AchvPct > M3_AchvPct" },
+    "declining": { "condition": "M1_AchvPct < M2_AchvPct AND M2_AchvPct < M3_AchvPct" },
+    "consistent_overachievement": { "condition": "M1_AchvPct >= 100 AND M2_AchvPct >= 100 AND M3_AchvPct >= 100" },
+    "consistent_underachievement": { "condition": "M1_AchvPct < 100 AND M2_AchvPct < 100 AND M3_AchvPct < 100" }
+  },
+
+  "alert_conditions": {
+    "critical_underachievement": { "condition": "M1_AchvPct < 80", "priority": "High" },
+    "sustained_underachievement": { "condition": "M1_AchvPct < 100 AND M2_AchvPct < 100 AND M3_AchvPct < 100", "priority": "High" }
+  },
+
+  "llm_instructions": [
+    "Treat M1 as the most important month — it represents the most recent reporting period.",
+    "Always start the insight using M1 sales performance.",
+    "Compare M1 against M2 and M3 to determine improvement or deterioration trends.",
+    "Use M1_Gap_EUR and M1_AchvPct as primary insight drivers.",
+    "Use M2 and M3 primarily for trend analysis.",
+    "Highlight dealers consistently exceeding sales targets.",
+    "Highlight dealers consistently missing sales targets.",
+    "Highlight improving or deteriorating achievement percentages.",
+    "Highlight widening or narrowing target gaps.",
+    "Support every statement with actual metric values.",
+    "Do not invent business reasons, market causes, supply chain issues, customer behaviour, or operational explanations.",
+    "If M1_AchvPct > 100, describe the dealer as exceeding sales target.",
+    "If M1_AchvPct < 100, describe the dealer as below sales target.",
+    "If M1_AchvPct = 100, describe the dealer as exactly meeting sales target.",
+    "Use actual month names in the narrative and never use M1, M2, or M3.",
+    "Generate concise business-focused insights suitable for a sales representative preparing for a dealer discussion."
+  ]
+}

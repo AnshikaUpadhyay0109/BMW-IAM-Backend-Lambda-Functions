@@ -1,0 +1,56 @@
+{
+  "dataset_name": "Customer Count Trend",
+  "business_domain": "BMW Independent Aftermarket",
+  "grain": "Dealer",
+  "primary_entity": "Dealer",
+
+  "dataset_description": "Monthly distinct customer counts (April-June 2026) per dealer, with a trend label based on month-over-month decline, for a fixed 10-dealer sample.",
+
+  "filters": {
+    "dealer_code_in": [
+      "21125", "11380", "35955", "33400", "40477",
+      "6057", "30864", "9118", "28965", "33160"
+    ],
+    "year": 2026,
+    "month_in": [3, 4, 5, 6]
+  },
+
+  "reporting_period_logic": {
+    "months_covered": "March (3), April (4), May (5), June (6) 2026",
+    "customer_count_definition": "COUNT(DISTINCT customer_code) per dealer per month",
+    "missing_month_handling": "For dealers with activity in at least one selected month, missing months default to 0."
+  },
+
+  "dimensions": {
+    "dealer_code": { "description": "Unique dealer identifier." }
+  },
+
+  "metrics": {
+    "customer_count_apr_may_jun": {
+      "description": "April, May, and June distinct customer counts joined as a single comma-separated text string.",
+      "format": "'<apr_cnt>, <may_cnt>, <jun_cnt>'",
+      "example": "0, 103, 0"
+    },
+    "customer_count_trend": {
+      "description": "Trend label: 'Declining: X%' if at least 2 of the 3 month-over-month comparisons (Apr vs Mar, May vs Apr, Jun vs May) show a decline, otherwise 'Stable'.",
+      "declining_rule": "at least 2 of the 3 month-over-month checks show a drop",
+      "declining_value": "'Declining: ' followed by the average of the declining months' percentage drop, rounded to 2 decimals, followed by '%'",
+      "stable_value": "'Stable' (used whenever fewer than 2 of the 3 months show a decline)"
+    }
+  },
+
+  "output_columns": [
+    "dealer_code",
+    "customer_count_apr_may_jun",
+    "customer_count_trend"
+  ],
+
+  "llm_instructions": [
+    "customer_count_trend is only labelled 'Declining' when at least 2 of the 3 month-over-month checks (Apr vs Mar, May vs Apr, Jun vs May) show a drop; otherwise it is 'Stable'.",
+    "Do not describe a 'Stable' label as meaning the customer counts were flat or unchanged — check customer_count_apr_may_jun for the actual monthly values before describing the pattern.",
+    "Support any statement with the actual values in customer_count_apr_may_jun.",
+    "Do not invent reasons (e.g. seasonality, lost customers, competitor activity) for a decline or stability.",
+    "customer_count_apr_may_jun only contains April, May, and June values; March is used internally for the April comparison but is not shown in the output.",
+    "Parse the comma-separated string to extract individual monthly counts before generating narrative."
+  ]
+}

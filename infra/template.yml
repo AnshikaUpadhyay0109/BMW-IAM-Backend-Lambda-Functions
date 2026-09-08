@@ -32,14 +32,15 @@ Parameters:
 
   BedrockModelId:
     Type: String
-    Default: "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
-    Description: "Bedrock cross-region inference profile for eu-central-1"
+    Default: "arn:aws:bedrock:eu-central-1:245439046166:inference-profile/eu.anthropic.claude-haiku-4-5-20251001-v1:0"
+    Description: "Bedrock inference profile ARN for EU cross-region Haiku"
+
 
 # ── Globals ───────────────────────────────────────────────────────────────────
 Globals:
   Api:
     Cors:
-      AllowMethods: "'GET,POST,OPTIONS'"
+      AllowMethods: "'GET,POST,PUT,OPTIONS'"
       AllowHeaders: "'Content-Type,Authorization'"
       AllowOrigin:  "'*'"
 
@@ -56,11 +57,12 @@ Globals:
         ATHENA_DATABASE:    !Ref AthenaDatabase
         ATHENA_REGION:      eu-central-1
         S3_OUTPUT_LOCATION: !Ref S3OutputLocation
-        ATHENA_WORKGROUP:   primary
+        ATHENA_WORKGROUP:   dibmw-benchmark-metadata
         RESULTS_BUCKET:     !Ref ResultsBucket
         SNS_TOPIC_ARN:      !Ref SnsTopicArn
         PROCESSED_PREFIX:   processed/
         DEALER_TABLE_NAME:  !Sub dibmw-dealer-cache-${Stage}
+        VISITS_TABLE_NAME:  !Sub bmw_visits-${Stage}
         POLL_INTERVAL_SEC:  "5"
         MAX_POLL_ATTEMPTS:  "160"
 
@@ -246,6 +248,23 @@ Resources:
         - AttributeName: sk
           KeyType: RANGE
 
+  # ── DynamoDB Table 2: visit form drafts and submissions ───────────────────
+  VisitsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub bmw_visits-${Stage}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: dealer_code
+          AttributeType: S
+        - AttributeName: visit_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: dealer_code
+          KeyType: HASH
+        - AttributeName: visit_id
+          KeyType: RANGE
+
   # ── Function 4: Result Aggregator ─────────────────────────────────────────
   ResultAggregatorFunction:
     Type: AWS::Serverless::Function
@@ -270,13 +289,23 @@ Resources:
       CodeUri: ../functions/insights_generator/
       Handler: handler.lambda_handler
       Description: Generates AI insights (top_issues, summary, pitch) via Bedrock; caches in DynamoDB
-      Timeout: 60
+      Timeout: 90
       Environment:
         Variables:
           BEDROCK_MODEL_ID: !Ref BedrockModelId
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref DealerCacheTable
+        - Statement:
+            - Effect: Allow
+              Action: s3:GetObject
+              Resource: !Sub "arn:aws:s3:::${ResultsBucket}/results/benchmark/*"
+            - Effect: Allow
+              Action: s3:ListBucket
+              Resource: !Sub "arn:aws:s3:::${ResultsBucket}"
+              Condition:
+                StringLike:
+                  s3:prefix: "results/benchmark/*"
         - Statement:
             - Effect: Allow
               Action: bedrock:InvokeModel
@@ -403,6 +432,78 @@ Resources:
           Properties:
             Path: /{proxy+}
             Method: ANY
+
+  # ── Function: Get Draft Visit ─────────────────────────────────────────────
+  GetDraftVisitFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub dibmw-get-draft-visit-${Stage}
+      CodeUri: ../functions/get_draft_visit/
+      Handler: handler.lambda_handler
+      Description: Returns the latest draft visit form for a dealer (or null if none)
+      Timeout: 30
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref VisitsTable
+      Events:
+        GetDraftVisit:
+          Type: Api
+          Properties:
+            Path: /visits/{dealer_code}/draft
+            Method: GET
+        GetDraftVisitOptions:
+          Type: Api
+          Properties:
+            Path: /visits/{dealer_code}/draft
+            Method: OPTIONS
+
+  # ── Function: Save / Submit Visit ─────────────────────────────────────────
+  SaveVisitFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub dibmw-save-visit-${Stage}
+      CodeUri: ../functions/save_visit/
+      Handler: handler.lambda_handler
+      Description: Upserts a visit form (draft or submitted) into DynamoDB
+      Timeout: 30
+      Policies:
+        - DynamoDBWritePolicy:
+            TableName: !Ref VisitsTable
+      Events:
+        SaveVisit:
+          Type: Api
+          Properties:
+            Path: /visits/{dealer_code}/{visit_id}
+            Method: PUT
+        SaveVisitOptions:
+          Type: Api
+          Properties:
+            Path: /visits/{dealer_code}/{visit_id}
+            Method: OPTIONS
+
+  # ── Function: Search Visit ────────────────────────────────────────────────
+  SearchVisitFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub dibmw-search-visit-${Stage}
+      CodeUri: ../functions/search_visit/
+      Handler: handler.lambda_handler
+      Description: Searches visits by dealer_code + optional form_type and visit_date filters
+      Timeout: 30
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref VisitsTable
+      Events:
+        SearchVisit:
+          Type: Api
+          Properties:
+            Path: /visits/{dealer_code}/search
+            Method: GET
+        SearchVisitOptions:
+          Type: Api
+          Properties:
+            Path: /visits/{dealer_code}/search
+            Method: OPTIONS
 
   # ── Step Functions: Parallel pipeline ─────────────────────────────────────
   AnalyticsPipeline:
@@ -622,3 +723,11 @@ Outputs:
     Value: !GetAtt AnalyticsPipeline.Arn
   InsightsGeneratorArn:
     Value: !GetAtt InsightsGeneratorFunction.Arn
+
+  VisitsTableName:
+    Description: "DynamoDB table — visit form drafts and submissions"
+    Value: !Ref VisitsTable
+  GetDraftVisitArn:
+    Value: !GetAtt GetDraftVisitFunction.Arn
+  SaveVisitArn:
+    Value: !GetAtt SaveVisitFunction.Arn

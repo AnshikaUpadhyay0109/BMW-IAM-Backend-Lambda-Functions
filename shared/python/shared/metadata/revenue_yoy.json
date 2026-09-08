@@ -1,0 +1,54 @@
+{
+  "dataset_name": "Dealer Revenue Year-over-Year",
+  "business_domain": "BMW Independent Aftermarket",
+  "grain": "Dealer",
+  "primary_entity": "Dealer",
+
+  "dataset_description": "Dealer-level current-year and last-year revenue for the latest reporting month, for a fixed list of 10 dealers.",
+
+  "filters": {
+    "dealer_code_in": [
+      "21125", "11380", "35955", "33400", "40477",
+      "6057", "30864", "9118", "28965", "33160"
+    ]
+  },
+
+  "reporting_period_logic": {
+    "latest_reporting_month": "MAX(month) in the current year where sales_actual_MTD is not null",
+    "current_year_window": "year = current year AND month = latest_reporting_month",
+    "last_year_window": "year = current year - 1 AND month = latest_reporting_month"
+  },
+
+  "dimensions": {
+    "dealer_code": { "description": "Unique dealer identifier." },
+    "dealer_name": { "description": "Dealer name.", "source": "dealer_master.dealer_name" }
+  },
+
+  "metrics": {
+    "cy_revenue_eur": {
+      "description": "Current-year actual revenue for the latest reporting month.",
+      "unit": "EUR",
+      "source": "sales_actual_MTD"
+    },
+    "ly_revenue_eur": {
+      "description": "Prior-year actual revenue for the same reporting month.",
+      "unit": "EUR",
+      "source": "sales_actual_MTD"
+    },
+    "lat_month": {
+      "description": "The latest current-year month number used for both current-year and last-year figures.",
+      "unit": "month_number (1-12)"
+    }
+  },
+
+  "llm_instructions": [
+    "Base the insight on the latest reporting month only (lat_month).",
+    "Compare cy_revenue_eur against ly_revenue_eur.",
+    "Support every statement with actual metric values.",
+    "Do not invent business reasons, market causes, supply chain issues, customer behaviour, or operational explanations.",
+    "lat_month is a number (1-12); convert it to a month name in the narrative.",
+    "If cy_revenue_eur > ly_revenue_eur, describe the dealer as growing year-over-year.",
+    "If cy_revenue_eur < ly_revenue_eur, describe the dealer as declining year-over-year.",
+    "Quantify the absolute difference and percentage change between cy and ly revenue where possible."
+  ]
+}

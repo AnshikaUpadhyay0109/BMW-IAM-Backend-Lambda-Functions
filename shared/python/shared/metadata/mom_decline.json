@@ -1,0 +1,108 @@
+{
+  "dataset_name": "Dealer Aftersales Category Month-over-Month Performance",
+  "business_domain": "BMW Independent Aftermarket",
+  "grain": "Dealer",
+  "primary_entity": "Dealer",
+
+  "dataset_description": "Dealer-level aftersales category sales performance across the latest three reporting months, including category-wise sales values and identification of categories exhibiting sustained month-over-month decline patterns.",
+
+  "reporting_period_logic": {
+    "latest_reporting_month": "Current Date - 2 Months",
+    "middle_reporting_month": "Current Date - 3 Months",
+    "oldest_reporting_month": "Current Date - 4 Months",
+    "decline_comparison_logic": [
+      "Latest reporting month compared with middle reporting month",
+      "Middle reporting month compared with oldest reporting month",
+      "Oldest reporting month compared with Current Date - 5 Months"
+    ]
+  },
+
+  "dimensions": {
+    "Dealer_ID": {
+      "description": "Unique dealer identifier."
+    }
+  },
+
+  "category_columns": {
+    "ComfortSafetyAccessories": { "description": "Sales values for Comfort and Safety Accessories across oldest, middle and latest reporting months.", "format": "Oldest Month Sales, Middle Month Sales, Latest Month Sales" },
+    "TransportSolutionsAccessories": { "description": "Sales values for Transport Solutions Accessories across oldest, middle and latest reporting months." },
+    "SpecialCasesParts": { "description": "Sales values for Special Cases Parts across oldest, middle and latest reporting months." },
+    "Maintenance": { "description": "Sales values for Maintenance category across oldest, middle and latest reporting months." },
+    "Motorsport": { "description": "Sales values for Motorsport category across oldest, middle and latest reporting months." },
+    "Accident": { "description": "Sales values for Accident category across oldest, middle and latest reporting months." },
+    "BMWGroupClassicMotorcycle": { "description": "Sales values for BMW Group Classic Motorcycle category across oldest, middle and latest reporting months." },
+    "BMWGroupClassicAutomobile": { "description": "Sales values for BMW Group Classic Automobile category across oldest, middle and latest reporting months." },
+    "Repair": { "description": "Sales values for Repair category across oldest, middle and latest reporting months." },
+    "WheelsAndTires": { "description": "Sales values for Wheels and Tires category across oldest, middle and latest reporting months." },
+    "ExteriorDesignAccessories": { "description": "Sales values for Exterior Design Accessories across oldest, middle and latest reporting months." },
+    "MotorcycleEquipment": { "description": "Sales values for Motorcycle Equipment category across oldest, middle and latest reporting months." },
+    "Electronics": { "description": "Sales values for Electronics category across oldest, middle and latest reporting months." },
+    "Wear": { "description": "Sales values for Wear category across oldest, middle and latest reporting months." },
+    "SmallParts": { "description": "Sales values for Small Parts category across oldest, middle and latest reporting months." },
+    "ChemicalProductsAccessories": { "description": "Sales values for Chemical Products Accessories across oldest, middle and latest reporting months." },
+    "Unknown": { "description": "Sales values where aftersales category is null or unavailable." }
+  },
+
+  "decline_metrics": {
+    "Categories_With_Decline_Pct": {
+      "description": "List of categories that declined in at least two month-over-month comparisons.",
+      "format": "Category Name : Average Decline %",
+      "example": "Maintenance: 21.30%, Repair: 15.60%"
+    }
+  },
+
+  "decline_logic": {
+    "decline_definition": { "condition": "Current Month Sales < Previous Month Sales" },
+    "decline_threshold": { "condition": "Category must decline in at least 2 out of 3 available decline comparisons." },
+    "average_decline_percentage": { "formula": "Average percentage decline across all decline occurrences." }
+  },
+
+  "trend_analysis_logic": {
+    "latest_month_priority": "Always prioritize latest reporting month sales performance.",
+    "declining_category": { "condition": "Category appears in Categories_With_Decline_Pct", "meaning": "Category exhibits sustained sales deterioration." },
+    "stable_category": { "condition": "Category not present in Categories_With_Decline_Pct", "meaning": "Category does not meet sustained decline criteria." },
+    "high_risk_category": { "condition": "Average decline percentage exceeds 25%", "meaning": "Category requires dealer discussion and investigation." },
+    "moderate_risk_category": { "condition": "Average decline percentage between 10% and 25%", "meaning": "Category should be monitored." },
+    "low_risk_category": { "condition": "Average decline percentage below 10%", "meaning": "Minor decline pattern." }
+  },
+
+  "alert_conditions": {
+    "multiple_declining_categories": { "condition": "More than 3 categories appear in Categories_With_Decline_Pct", "priority": "High", "meaning": "Dealer exhibits broad-based decline across multiple categories." },
+    "critical_decline": { "condition": "Average category decline > 30%", "priority": "High", "meaning": "Significant category deterioration." }
+  },
+
+  "recommended_insights": [
+    "Latest month category performance",
+    "Sustained category decline detection",
+    "Highest declining aftersales category",
+    "Number of declining categories",
+    "Average decline percentage by category",
+    "Broad-based dealer decline"
+  ],
+
+  "talking_point_generation": {
+    "maintenance_decline": "Maintenance category shows sustained sales decline and may require dealer discussion regarding servicing demand and ordering behaviour.",
+    "repair_decline": "Repair category is experiencing declining sales momentum and should be reviewed for lost demand opportunities.",
+    "multiple_category_decline": "Multiple aftersales categories are showing deterioration, suggesting a broader dealer performance issue.",
+    "single_category_decline": "Decline appears isolated to a specific category and may indicate a focused opportunity area.",
+    "stable_performance": "Dealer does not exhibit significant sustained category decline patterns."
+  },
+
+  "llm_instructions": [
+    "Treat Categories_With_Decline_Pct as the primary driver of insights.",
+    "Always prioritize categories with the highest average decline percentage.",
+    "Identify which categories have declined in multiple periods.",
+    "Use category sales values as supporting evidence.",
+    "Highlight categories with sustained deterioration.",
+    "Differentiate between isolated category decline and broad-based decline.",
+    "If no categories appear in Categories_With_Decline_Pct, describe dealer performance as stable.",
+    "Quantify decline percentages in generated insights.",
+    "Support every insight using actual values from the dataset.",
+    "Do not invent business reasons, market forces, customer behaviour, inventory issues, pricing issues, supply chain constraints, or operational causes.",
+    "Generate concise dealer-facing business insights.",
+    "Identify category-specific discussion points for field sales representatives.",
+    "Use actual category names in narrative output.",
+    "Highlight highest-risk categories first.",
+    "Prioritize latest month performance while validating trend consistency across all reporting months."
+  ]
+}

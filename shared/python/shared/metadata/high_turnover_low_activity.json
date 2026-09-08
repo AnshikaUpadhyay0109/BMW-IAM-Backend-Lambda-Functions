@@ -1,0 +1,58 @@
+{
+  "dataset_name": "High Turnover, Low Activity",
+  "business_domain": "BMW Independent Aftermarket",
+  "grain": "Dealer",
+  "primary_entity": "Dealer",
+
+  "dataset_description": "Flags dealers whose sales (turnover) are above their market's average AND whose ordering activity is low (infrequent or not recent), for a fixed 10-dealer sample, Apr-Jun 2026.",
+
+  "filters": {
+    "year": 2026,
+    "month_in": [4, 5, 6],
+    "dealer_code_by_country": {
+      "FR": ["21125", "11380", "35955", "33400"],
+      "GR": ["40477", "6057", "30864", "9118"],
+      "PL": ["28965", "33160"]
+    }
+  },
+
+  "reporting_period_logic": {
+    "window": "year = 2026 AND month IN (4, 5, 6)",
+    "recency_reference_date": "DATE '2026-06-30'"
+  },
+
+  "dimensions": {
+    "country": { "description": "Market. Also used as the peer group for the turnover comparison." },
+    "entity_id": { "description": "Dealer identifier.", "source": "dealer_code" }
+  },
+
+  "metrics": {
+    "turnover": { "description": "Total sales amount for the dealer over the window.", "source": "SUM(net_amount)" },
+    "invoice_count": { "description": "Count of distinct invoices for the dealer over the window.", "source": "COUNT(DISTINCT invoice_number)" },
+    "recency_days": { "description": "Days between the dealer's most recent invoice and 2026-06-30.", "unit": "days" },
+    "avg_turnover": { "description": "Average turnover across dealers in the same country (within this sample).", "source": "AVG(turnover) grouped by country" },
+    "high_turnover": { "description": "True if the dealer's turnover is above the country average turnover.", "formula": "turnover > avg_turnover" },
+    "low_activity": { "description": "True if the dealer has low order frequency OR poor recency.", "formula": "invoice_count < 2 OR recency_days > 30" },
+    "high_turnover_low_activity_flag": { "description": "True if the dealer is both high_turnover AND low_activity.", "formula": "high_turnover AND low_activity" }
+  },
+
+  "thresholds": {
+    "recency_days_cutoff": 30,
+    "invoice_count_cutoff": 2,
+    "turnover_bar": "country average"
+  },
+
+  "talking_point_generation": {
+    "flagged": "You sell more than the average dealer in your market, but your sales activity has gone quiet.",
+    "not_flagged": "Do not raise this talking point."
+  },
+
+  "llm_instructions": [
+    "Only raise the talking point for dealers where high_turnover_low_activity_flag is true.",
+    "Do not raise or imply this talking point for dealers where the flag is false.",
+    "Support the statement with the dealer's actual turnover, avg_turnover, and recency_days values.",
+    "Treat this as a per-dealer conversation cue, not a ranking or prioritization across dealers.",
+    "Do not invent business reasons for why activity is low.",
+    "high_turnover_low_activity_flag may be stored as a string ('true'/'false') or boolean — treat both as equivalent."
+  ]
+}
