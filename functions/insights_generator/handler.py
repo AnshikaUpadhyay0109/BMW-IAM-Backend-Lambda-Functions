@@ -234,7 +234,7 @@ Return a JSON object with exactly these three fields:
       "impact": "<2-3 sentences: explain the business consequence if unaddressed — revenue risk, customer churn, quarter-end exposure. Quantify where possible.>"
     }}
   ],
-  "summary": "<Write 4-5 sentences covering the dealer's full performance picture. Include: (1) revenue achievement vs target with M1_AchvPct percentage and whether the dealer is on track, (2) ABC segment and what it means for their priority tier, (3) customer count trend over Apr-Jun and whether the base is growing or shrinking, (4) YoY revenue direction with cy vs ly figures, (5) overall risk level and urgency for this visit.>",
+  "summary": "<Write 4-5 sentences covering the dealer's full performance picture. Include: (1) revenue achievement vs target with M1_AchvPct percentage and whether the dealer is on track, (2) ABC segment and what it means for their priority tier, (3) customer count trend over the last 3 months and whether the base is growing or shrinking, (4) YoY revenue direction with cy vs ly figures, (5) overall risk level and urgency for this visit.>",
   "pitch": "<Write 4-5 structured talking points for the field rep to use during the visit. Each point should: name the specific issue, give the supporting data number, and suggest a concrete action or question to raise with the dealer. Cover: top declining category, high-turnover/low-activity flag if present, customer trend, revenue gap vs target, and one positive to open or close on.>"
 }}
 
@@ -262,7 +262,7 @@ Purchase Revenue vs Target (M1=latest month, M2=middle month, M3=oldest month):
 ABC Segmentation (YTD):
 {json.dumps(abc, indent=2)}
 
-Customer Trend (Apr-Jun 2026):
+Customer Trend (customer_count_last_3_months, customer_count_trend: Stable or Declining with avg decline %):
 {json.dumps(cust, indent=2)}
 
 Revenue YoY (CY vs LY MTD):

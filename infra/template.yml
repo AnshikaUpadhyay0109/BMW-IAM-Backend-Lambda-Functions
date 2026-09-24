@@ -62,7 +62,8 @@ Globals:
         SNS_TOPIC_ARN:      !Ref SnsTopicArn
         PROCESSED_PREFIX:   processed/
         DEALER_TABLE_NAME:  !Sub dibmw-dealer-cache-${Stage}
-        VISITS_TABLE_NAME:  !Sub bmw_visits-${Stage}
+        VISITS_TABLE_NAME:        !Sub bmw_visits-${Stage}
+        VISIT_CAPTURE_TABLE_NAME: !Sub bmw_visit_capture-${Stage}
         POLL_INTERVAL_SEC:  "5"
         MAX_POLL_ATTEMPTS:  "160"
 
@@ -212,6 +213,25 @@ Resources:
               Action: [kms:Decrypt, kms:GenerateDataKey]
               Resource: "*"
 
+  # ── Function 7: Comp Customer Count (YoY same-month comparison) ─────────
+  CompCustomerCountFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub dibmw-comp-customer-count-${Stage}
+      CodeUri: ../functions/comp_customer_count/
+      Handler: handler.lambda_handler
+      Description: Compares current-month customer count vs same month last year; health-tags by country NTILE
+      Policies:
+        - AmazonAthenaFullAccess
+        - S3ReadPolicy:
+            BucketName: !Ref CuratedBucket
+        - S3WritePolicy:
+            BucketName: !Ref ResultsBucket
+        - Statement:
+            - Effect: Allow
+              Action: [kms:Decrypt, kms:GenerateDataKey]
+              Resource: "*"
+
   # ── Function 6: Customer Count Trend ─────────────────────────────────────
   CustomerTrendFunction:
     Type: AWS::Serverless::Function
@@ -253,6 +273,23 @@ Resources:
     Type: AWS::DynamoDB::Table
     Properties:
       TableName: !Sub bmw_visits-${Stage}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: dealer_code
+          AttributeType: S
+        - AttributeName: visit_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: dealer_code
+          KeyType: HASH
+        - AttributeName: visit_id
+          KeyType: RANGE
+
+  # ── DynamoDB Table 3: shared visit capture (frontend visit form) ───────────
+  VisitCaptureTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub bmw_visit_capture-${Stage}
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: dealer_code
@@ -505,6 +542,78 @@ Resources:
             Path: /visits/{dealer_code}/search
             Method: OPTIONS
 
+  # ── Function: Get Draft Visit Capture ────────────────────────────────────
+  GetDraftVisitCaptureFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub dibmw-get-draft-visit-capture-${Stage}
+      CodeUri: ../functions/get_draft_visit_capture/
+      Handler: handler.lambda_handler
+      Description: Returns the latest draft from bmw_visit_capture for a dealer (or null if none)
+      Timeout: 30
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref VisitCaptureTable
+      Events:
+        GetDraftVisitCapture:
+          Type: Api
+          Properties:
+            Path: /visit-capture/{dealer_code}/draft
+            Method: GET
+        GetDraftVisitCaptureOptions:
+          Type: Api
+          Properties:
+            Path: /visit-capture/{dealer_code}/draft
+            Method: OPTIONS
+
+  # ── Function: Save / Submit Visit Capture ────────────────────────────────
+  SaveVisitCaptureFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub dibmw-save-visit-capture-${Stage}
+      CodeUri: ../functions/save_visit_capture/
+      Handler: handler.lambda_handler
+      Description: Upserts a shared visit capture form (draft or submitted) into bmw_visit_capture
+      Timeout: 30
+      Policies:
+        - DynamoDBWritePolicy:
+            TableName: !Ref VisitCaptureTable
+      Events:
+        SaveVisitCapture:
+          Type: Api
+          Properties:
+            Path: /visit-capture/{dealer_code}/{visit_id}
+            Method: PUT
+        SaveVisitCaptureOptions:
+          Type: Api
+          Properties:
+            Path: /visit-capture/{dealer_code}/{visit_id}
+            Method: OPTIONS
+
+  # ── Function: Search Visit Capture ───────────────────────────────────────
+  SearchVisitCaptureFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub dibmw-search-visit-capture-${Stage}
+      CodeUri: ../functions/search_visit_capture/
+      Handler: handler.lambda_handler
+      Description: Searches bmw_visit_capture by dealer_code + optional form_type and visit_date
+      Timeout: 30
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref VisitCaptureTable
+      Events:
+        SearchVisitCapture:
+          Type: Api
+          Properties:
+            Path: /visit-capture/{dealer_code}/search
+            Method: GET
+        SearchVisitCaptureOptions:
+          Type: Api
+          Properties:
+            Path: /visit-capture/{dealer_code}/search
+            Method: OPTIONS
+
   # ── Step Functions: Parallel pipeline ─────────────────────────────────────
   AnalyticsPipeline:
     Type: AWS::Serverless::StateMachine
@@ -607,6 +716,17 @@ Resources:
                         IntervalSeconds: 5
                         MaxAttempts: 2
                         BackoffRate: 2
+              - StartAt: CompCustomerCount
+                States:
+                  CompCustomerCount:
+                    Type: Task
+                    Resource: !GetAtt CompCustomerCountFunction.Arn
+                    End: true
+                    Retry:
+                      - ErrorEquals: [States.TaskFailed]
+                        IntervalSeconds: 5
+                        MaxAttempts: 2
+                        BackoffRate: 2
             # Output: ordered array of branch results → input to ResultAggregator
             Catch:
               - ErrorEquals: [States.ALL]
@@ -662,6 +782,8 @@ Resources:
             FunctionName: !Ref SaleRevenueVsTargetFunction
         - LambdaInvokePolicy:
             FunctionName: !Ref PurchaseRevenueVsTargetFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref CompCustomerCountFunction
         - LambdaInvokePolicy:
             FunctionName: !Ref ResultAggregatorFunction
         - LambdaInvokePolicy:
@@ -731,3 +853,13 @@ Outputs:
     Value: !GetAtt GetDraftVisitFunction.Arn
   SaveVisitArn:
     Value: !GetAtt SaveVisitFunction.Arn
+
+  VisitCaptureTableName:
+    Description: "DynamoDB table — shared visit capture form (bmw_visit_capture)"
+    Value: !Ref VisitCaptureTable
+  GetDraftVisitCaptureArn:
+    Value: !GetAtt GetDraftVisitCaptureFunction.Arn
+  SaveVisitCaptureArn:
+    Value: !GetAtt SaveVisitCaptureFunction.Arn
+  SearchVisitCaptureArn:
+    Value: !GetAtt SearchVisitCaptureFunction.Arn

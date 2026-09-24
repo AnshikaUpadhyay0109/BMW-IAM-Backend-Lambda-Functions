@@ -143,19 +143,22 @@ def _process_yoy(rows: list[dict]) -> dict:
 def _process_high_turnover_low_activity(rows: list[dict]) -> dict:
     dealers = [
         {
-            "entity_id":                        row.get("entity_id", ""),
-            "country":                          row.get("country", ""),
-            "turnover":                         _safe_float(row.get("turnover")),
-            "invoice_count":                    _safe_float(row.get("invoice_count")),
-            "recency_days":                     _safe_float(row.get("recency_days")),
-            "avg_turnover":                     _safe_float(row.get("avg_turnover")),
-            "high_turnover":                    row.get("high_turnover"),
-            "low_activity":                     row.get("low_activity"),
-            "high_turnover_low_activity_flag":  row.get("high_turnover_low_activity_flag"),
+            "dealer_code":             row.get("dealer_code", ""),
+            "country":                 row.get("country", ""),
+            "turnover_score":          _safe_float(row.get("turnover_score")),
+            "purchase_growth_pct":     _safe_float(row.get("purchase_growth_pct")),
+            "sales_growth_pct":        _safe_float(row.get("sales_growth_pct")),
+            "invoice_growth_pct":      _safe_float(row.get("invoice_growth_pct")),
+            "turnover_tag":            row.get("turnover_tag", ""),
+            "activity_tag":            row.get("activity_tag", ""),
+            "invoice_momentum_tag":    row.get("invoice_momentum_tag", ""),
+            "dealer_segment":          row.get("dealer_segment", ""),
+            "ai_opportunity_tag":      row.get("ai_opportunity_tag", ""),
+            "purchase_risk_level":     row.get("purchase_risk_level", ""),
         }
         for row in rows
     ]
-    flagged = [d for d in dealers if d["high_turnover_low_activity_flag"] in (True, "true", "1")]
+    flagged = [d for d in dealers if d["dealer_segment"] == "High Turnover, Low Activity"]
     return {
         "total_dealers": len(dealers),
         "flagged_count": len(flagged),
@@ -167,22 +170,51 @@ def _process_high_turnover_low_activity(rows: list[dict]) -> dict:
 def _process_revenue_yoy(rows: list[dict]) -> dict:
     dealers = [
         {
-            "dealer_code":    row.get("dealer_code", ""),
-            "dealer_name":    row.get("dealer_name", ""),
-            "cy_revenue_eur": _safe_float(row.get("cy_revenue_eur")),
-            "ly_revenue_eur": _safe_float(row.get("ly_revenue_eur")),
-            "lat_month":      row.get("lat_month"),
+            "dealer_code":              row.get("dealer_code", ""),
+            "dealer_name":              row.get("dealer_name", ""),
+            "country":                  row.get("country", ""),
+            "cy_revenue_eur":           _safe_float(row.get("current_year_sales_eur")),
+            "ly_revenue_eur":           _safe_float(row.get("last_year_sales_eur")),
+            "sales_gap_eur":            _safe_float(row.get("sales_gap_eur")),
+            "sales_growth_decline_pct": _safe_float(row.get("sales_growth_decline_pct")),
+            "sales_performance_tag":    row.get("sales_performance_tag", ""),
+            "dealer_health_tag":        row.get("dealer_health_tag", ""),
+            "comparison_month":         row.get("comparison_month"),
         }
         for row in rows
     ]
     return {"total_dealers": len(dealers), "all_dealers": dealers}
 
 
+def _process_comp_customer_count(rows: list[dict]) -> dict:
+    dealers = [
+        {
+            "dealer_code":                         r.get("dealer_code", ""),
+            "country":                             r.get("country", ""),
+            "current_month_customer_count":        _safe_float(r.get("current_month_customer_count")),
+            "last_year_same_month_customer_count": _safe_float(r.get("last_year_same_month_customer_count")),
+            "growth_degrowth_pct":                 _safe_float(r.get("growth_degrowth_pct")),
+            "customer_growth_health_tag":          r.get("customer_growth_health_tag", ""),
+        }
+        for r in rows
+    ]
+    critical   = [d for d in dealers if d["customer_growth_health_tag"] == "Critical"]
+    monitoring = [d for d in dealers if d["customer_growth_health_tag"] == "Needs Monitoring"]
+    stable     = [d for d in dealers if d["customer_growth_health_tag"] == "Stable"]
+    return {
+        "total_dealers":    len(dealers),
+        "critical_count":   len(critical),
+        "monitoring_count": len(monitoring),
+        "stable_count":     len(stable),
+        "all_dealers":      dealers,
+    }
+
+
 def _process_customer_trend(rows: list[dict]) -> dict:
     all_d = [
         {
-            "dealer_code":               r.get("dealer_code", ""),
-            "customer_count_apr_may_jun": r.get("customer_count_apr_may_jun", ""),
+            "dealer_code":                r.get("dealer_code", ""),
+            "customer_count_last_3_months": r.get("customer_count_last_3_months", ""),
             "customer_count_trend":       r.get("customer_count_trend", ""),
         }
         for r in rows
@@ -263,9 +295,26 @@ def _yoy_by_dealer(rows: list[dict]) -> dict:
 def _revenue_yoy_by_dealer(rows: list[dict]) -> dict:
     return {
         row["dealer_code"]: {
-            "cy_revenue_eur": _safe_float(row.get("cy_revenue_eur")),
-            "ly_revenue_eur": _safe_float(row.get("ly_revenue_eur")),
-            "lat_month":      row.get("lat_month"),
+            "cy_revenue_eur":           _safe_float(row.get("current_year_sales_eur")),
+            "ly_revenue_eur":           _safe_float(row.get("last_year_sales_eur")),
+            "sales_gap_eur":            _safe_float(row.get("sales_gap_eur")),
+            "sales_growth_decline_pct": _safe_float(row.get("sales_growth_decline_pct")),
+            "sales_performance_tag":    row.get("sales_performance_tag", ""),
+            "dealer_health_tag":        row.get("dealer_health_tag", ""),
+            "comparison_month":         row.get("comparison_month"),
+        }
+        for row in rows if row.get("dealer_code")
+    }
+
+
+def _comp_customer_count_by_dealer(rows: list[dict]) -> dict:
+    return {
+        row["dealer_code"]: {
+            "country":                             row.get("country", ""),
+            "current_month_customer_count":        _safe_float(row.get("current_month_customer_count")),
+            "last_year_same_month_customer_count": _safe_float(row.get("last_year_same_month_customer_count")),
+            "growth_degrowth_pct":                 _safe_float(row.get("growth_degrowth_pct")),
+            "customer_growth_health_tag":          row.get("customer_growth_health_tag", ""),
         }
         for row in rows if row.get("dealer_code")
     }
@@ -274,8 +323,8 @@ def _revenue_yoy_by_dealer(rows: list[dict]) -> dict:
 def _customer_trend_by_dealer(rows: list[dict]) -> dict:
     return {
         row["dealer_code"]: {
-            "customer_count_apr_may_jun": row.get("customer_count_apr_may_jun", ""),
-            "customer_count_trend":       row.get("customer_count_trend", ""),
+            "customer_count_last_3_months": row.get("customer_count_last_3_months", ""),
+            "customer_count_trend":         row.get("customer_count_trend", ""),
         }
         for row in rows if row.get("dealer_code")
     }
@@ -283,17 +332,20 @@ def _customer_trend_by_dealer(rows: list[dict]) -> dict:
 
 def _high_turnover_low_activity_by_dealer(rows: list[dict]) -> dict:
     return {
-        row["entity_id"]: {
-            "country":                         row.get("country", ""),
-            "turnover":                        _safe_float(row.get("turnover")),
-            "invoice_count":                   _safe_float(row.get("invoice_count")),
-            "recency_days":                    _safe_float(row.get("recency_days")),
-            "avg_turnover":                    _safe_float(row.get("avg_turnover")),
-            "high_turnover":                   row.get("high_turnover"),
-            "low_activity":                    row.get("low_activity"),
-            "high_turnover_low_activity_flag": row.get("high_turnover_low_activity_flag"),
+        row["dealer_code"]: {
+            "country":              row.get("country", ""),
+            "turnover_score":       _safe_float(row.get("turnover_score")),
+            "purchase_growth_pct":  _safe_float(row.get("purchase_growth_pct")),
+            "sales_growth_pct":     _safe_float(row.get("sales_growth_pct")),
+            "invoice_growth_pct":   _safe_float(row.get("invoice_growth_pct")),
+            "turnover_tag":         row.get("turnover_tag", ""),
+            "activity_tag":         row.get("activity_tag", ""),
+            "invoice_momentum_tag": row.get("invoice_momentum_tag", ""),
+            "dealer_segment":       row.get("dealer_segment", ""),
+            "ai_opportunity_tag":   row.get("ai_opportunity_tag", ""),
+            "purchase_risk_level":  row.get("purchase_risk_level", ""),
         }
-        for row in rows if row.get("entity_id")
+        for row in rows if row.get("dealer_code")
     }
 
 
@@ -318,6 +370,7 @@ def _write_to_dynamodb(
     abc_by_d: dict, mom_by_d: dict, yoy_by_d: dict,
     rev_yoy_by_d: dict, cust_by_d: dict, htla_by_d: dict,
     sales_rvt_by_d: dict, purchase_rvt_by_d: dict,
+    comp_cust_by_d: dict,
     run_date: str,
 ):
     table       = dynamo.Table(DEALER_TABLE_NAME)
@@ -325,6 +378,7 @@ def _write_to_dynamodb(
         set(abc_by_d) | set(mom_by_d) | set(yoy_by_d)
         | set(rev_yoy_by_d) | set(cust_by_d) | set(htla_by_d)
         | set(sales_rvt_by_d) | set(purchase_rvt_by_d)
+        | set(comp_cust_by_d)
     )
     print(f"[result_aggregator] Writing {len(all_dealers)} dealer items to DynamoDB ({DEALER_TABLE_NAME})")
 
@@ -348,6 +402,7 @@ def _write_to_dynamodb(
                     "high_turnover_low_activity": htla_by_d.get(dc, {}),
                     "sale_revenue_vs_target":     sales_rvt_by_d.get(dc, {}),
                     "purchase_revenue_vs_target": purchase_rvt_by_d.get(dc, {}),
+                    "comp_customer_count":        comp_cust_by_d.get(dc, {}),
                 },
             }
             batch.put_item(Item=_to_dynamo(item))
@@ -382,27 +437,29 @@ def lambda_handler(event, context):
         def _rows(name):
             return _read_csv(results_by_name[name]["output_s3_path"]) if name in results_by_name else []
 
-        abc_rows  = _rows("abc_segmentation")
-        mom_rows  = _rows("mom_decline")
-        yoy_rows  = _rows("yoy_comparison")
-        rev_rows  = _rows("revenue_yoy")
-        cst_rows  = _rows("customer_trend")
-        htla_rows = _rows("high_turnover_low_activity")
-        svt_rows  = _rows("sale_revenue_vs_target")
-        pvt_rows  = _rows("purchase_revenue_vs_target")
+        abc_rows   = _rows("abc_segmentation")
+        mom_rows   = _rows("mom_decline")
+        yoy_rows   = _rows("yoy_comparison")
+        rev_rows   = _rows("revenue_yoy")
+        cst_rows   = _rows("customer_trend")
+        htla_rows  = _rows("high_turnover_low_activity")
+        svt_rows   = _rows("sale_revenue_vs_target")
+        pvt_rows   = _rows("purchase_revenue_vs_target")
+        comp_rows  = _rows("comp_customer_count")
 
         combined = {
             "processed_at":               datetime.now(timezone.utc).isoformat(),
             "partial":                    bool(failed_queries),
             "failed_queries":             failed_queries,
-            "abc_segmentation":           _process_abc(abc_rows)                        if abc_rows  else None,
-            "mom_decline":                _process_mom(mom_rows)                        if mom_rows  else None,
-            "yoy_comparison":             _process_yoy(yoy_rows)                        if yoy_rows  else None,
-            "revenue_yoy":                _process_revenue_yoy(rev_rows)                if rev_rows  else None,
-            "customer_trend":             _process_customer_trend(cst_rows)             if cst_rows  else None,
-            "high_turnover_low_activity": _process_high_turnover_low_activity(htla_rows) if htla_rows else None,
-            "sale_revenue_vs_target":     _process_vs_target(svt_rows)                  if svt_rows  else None,
-            "purchase_revenue_vs_target": _process_vs_target(pvt_rows)                  if pvt_rows  else None,
+            "abc_segmentation":           _process_abc(abc_rows)                          if abc_rows   else None,
+            "mom_decline":                _process_mom(mom_rows)                          if mom_rows   else None,
+            "yoy_comparison":             _process_yoy(yoy_rows)                          if yoy_rows   else None,
+            "revenue_yoy":                _process_revenue_yoy(rev_rows)                  if rev_rows   else None,
+            "customer_trend":             _process_customer_trend(cst_rows)               if cst_rows   else None,
+            "high_turnover_low_activity": _process_high_turnover_low_activity(htla_rows)  if htla_rows  else None,
+            "sale_revenue_vs_target":     _process_vs_target(svt_rows)                    if svt_rows   else None,
+            "purchase_revenue_vs_target": _process_vs_target(pvt_rows)                    if pvt_rows   else None,
+            "comp_customer_count":        _process_comp_customer_count(comp_rows)         if comp_rows  else None,
         }
         payload = json.dumps(combined, ensure_ascii=False)
 
@@ -422,14 +479,15 @@ def lambda_handler(event, context):
 
         run_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         _write_to_dynamodb(
-            _abc_by_dealer(abc_rows)                           if abc_rows  else {},
-            _mom_by_dealer(mom_rows)                           if mom_rows  else {},
-            _yoy_by_dealer(yoy_rows)                           if yoy_rows  else {},
-            _revenue_yoy_by_dealer(rev_rows)                   if rev_rows  else {},
-            _customer_trend_by_dealer(cst_rows)                if cst_rows  else {},
-            _high_turnover_low_activity_by_dealer(htla_rows)   if htla_rows else {},
-            _vs_target_by_dealer(svt_rows)                     if svt_rows  else {},
-            _vs_target_by_dealer(pvt_rows)                     if pvt_rows  else {},
+            _abc_by_dealer(abc_rows)                           if abc_rows   else {},
+            _mom_by_dealer(mom_rows)                           if mom_rows   else {},
+            _yoy_by_dealer(yoy_rows)                           if yoy_rows   else {},
+            _revenue_yoy_by_dealer(rev_rows)                   if rev_rows   else {},
+            _customer_trend_by_dealer(cst_rows)                if cst_rows   else {},
+            _high_turnover_low_activity_by_dealer(htla_rows)   if htla_rows  else {},
+            _vs_target_by_dealer(svt_rows)                     if svt_rows   else {},
+            _vs_target_by_dealer(pvt_rows)                     if pvt_rows   else {},
+            _comp_customer_count_by_dealer(comp_rows)          if comp_rows  else {},
             run_date,
         )
 
