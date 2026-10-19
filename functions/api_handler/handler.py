@@ -64,26 +64,82 @@ def _read_latest_s3() -> dict:
         )
 
 
+# Only the small, flat KPI sub-maps the overview list needs — deliberately excludes the
+# heavy per-dealer blobs (market_basket_uk_ir, parts_category_mix_benchmark) so the list
+# response stays well under Lambda's 6 MB payload cap regardless of dealer count.
+_LIST_PROJECTION = (
+    "dealer_code, sk, run_date, dealer_name, "
+    "kpis.abc_segmentation, kpis.revenue_yoy, kpis.high_turnover_low_activity, "
+    "kpis.comp_customer_count, kpis.sale_revenue_vs_target, kpis.customer_trend"
+)
+
+
+def _dealer_summary(item: dict) -> dict:
+    """Shape one DynamoDB dealer record into a lightweight overview row.
+    Full detail (including market basket + category mix) is served by
+    GET /dealers/{dealer_code}."""
+    kpis = item.get("kpis", {})
+    abc  = kpis.get("abc_segmentation", {})
+    rev  = kpis.get("revenue_yoy", {})
+    htla = kpis.get("high_turnover_low_activity", {})
+    comp = kpis.get("comp_customer_count", {})
+    svt  = kpis.get("sale_revenue_vs_target", {})
+    cust = kpis.get("customer_trend", {})
+    return {
+        "dealer_code":                item.get("dealer_code"),
+        "dealer_name":                item.get("dealer_name"),
+        "run_date":                   item.get("run_date"),
+        "country":                    abc.get("country"),
+        "segment":                    abc.get("segment"),
+        "ytd_sales_eur":              abc.get("ytd_sales_eur"),
+        "dealer_health_tag":          rev.get("dealer_health_tag"),
+        "sales_performance_tag":      rev.get("sales_performance_tag"),
+        "sales_growth_decline_pct":   rev.get("sales_growth_decline_pct"),
+        "dealer_segment":             htla.get("dealer_segment"),
+        "purchase_risk_level":        htla.get("purchase_risk_level"),
+        "customer_growth_health_tag": comp.get("customer_growth_health_tag"),
+        "m1_achv_pct":                svt.get("M1_AchvPct"),
+        "customer_count_trend":       cust.get("customer_count_trend"),
+    }
+
+
 # ── DynamoDB routes ───────────────────────────────────────────────────────────
 
-@app.get("/dealers", summary="List all dealers with their latest KPIs")
+@app.get("/dealers", summary="List all dealers with lightweight overview KPIs")
 def get_all_dealers():
     """
-    Returns every dealer record from DynamoDB (SK=LATEST).
-    Use this for the priority list / overview screen on the frontend.
+    Returns a lightweight summary row per dealer (SK=LATEST) for the priority list /
+    overview screen. Heavy per-dealer detail (market basket, category mix, full KPI maps)
+    is intentionally excluded to keep the response under Lambda's 6 MB payload cap —
+    fetch it per dealer via GET /dealers/{dealer_code}.
     """
-    table    = dynamo.Table(DEALER_TABLE_NAME)
-    response = table.scan(FilterExpression=Attr("sk").eq("LATEST"))
-    items    = response.get("Items", [])
-
-    while "LastEvaluatedKey" in response:
+    from botocore.exceptions import ClientError
+    try:
+        table    = dynamo.Table(DEALER_TABLE_NAME)
         response = table.scan(
             FilterExpression=Attr("sk").eq("LATEST"),
-            ExclusiveStartKey=response["LastEvaluatedKey"],
+            ProjectionExpression=_LIST_PROJECTION,
         )
-        items.extend(response.get("Items", []))
+        items    = response.get("Items", [])
 
-    return {"total": len(items), "dealers": _decimal_to_float(items)}
+        while "LastEvaluatedKey" in response:
+            response = table.scan(
+                FilterExpression=Attr("sk").eq("LATEST"),
+                ProjectionExpression=_LIST_PROJECTION,
+                ExclusiveStartKey=response["LastEvaluatedKey"],
+            )
+            items.extend(response.get("Items", []))
+    except ClientError as e:
+        code = e.response["Error"]["Code"]
+        if code == "ResourceNotFoundException":
+            raise HTTPException(
+                status_code=404,
+                detail="Dealer table not found — run the pipeline first via POST /trigger",
+            )
+        raise HTTPException(status_code=500, detail=f"DynamoDB error: {code}")
+
+    dealers = [_dealer_summary(_decimal_to_float(item)) for item in items]
+    return {"total": len(dealers), "dealers": dealers}
 
 
 @app.get("/dealers/{dealer_code}", summary="Get a single dealer's full KPI profile")

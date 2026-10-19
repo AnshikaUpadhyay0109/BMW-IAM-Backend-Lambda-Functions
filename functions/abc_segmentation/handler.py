@@ -14,6 +14,8 @@ SQL_QUERY = """
 WITH ytd_sales AS (
     SELECT
         sd.dealer_code,
+        max(dm.region) as region,
+        max(dm.dealer_city) as dealer_city,
         MAX(dm.dealer_name) AS dealer_name,
         MAX(dm.country) AS country,
         MAX(sd.sales_actual_YTD) AS ytd_sales
@@ -27,7 +29,9 @@ WITH ytd_sales AS (
 SELECT
     dealer_code,
     dealer_name,
+    region,
     country,
+    dealer_city,
     ROUND(ytd_sales, 0) AS ytd_sales_eur,
     NTILE(3) OVER (ORDER BY ytd_sales DESC) AS quantile,
     CASE NTILE(3) OVER (ORDER BY ytd_sales DESC)
@@ -36,6 +40,7 @@ SELECT
         WHEN 3 THEN 'C'
     END AS segment
 FROM ytd_sales
+WHERE region IN ('UK IR')
 ORDER BY ytd_sales DESC;
 """
 

@@ -22,6 +22,18 @@ CATEGORIES = [
     "ChemicalProductsAccessories", "Unknown",
 ]
 
+# Lowercase column names as stored by Athena CTAS in parts_category_mix_benchmark_uk_ir
+BENCHMARK_CATEGORIES = [
+    "comfortsafetyaccessories", "transportsolutionsaccessories", "specialcasesparts",
+    "maintenance", "motorsport", "accident", "bmwgroupclassicmotorcycle",
+    "bmwgroupclassicautomobile", "repair", "wheelsandtires", "exteriordesignaccessories",
+    "motorcycleequipment", "electronics", "wear", "smallparts",
+    "chemicalproductsaccessories", "bmwgroupclassicmotorsport",
+    "communicationinformationaccessories", "headline", "interiordesignaccessories",
+    "invest", "lifestyle", "localparts", "riderequipment",
+    "technicaldocumentationaccessories", "technicaltuningaccessories", "unknown",
+]
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -43,6 +55,19 @@ def _safe_float(v) -> float | None:
         return float(v) if v not in (None, "", "null") else None
     except (ValueError, TypeError):
         return None
+
+
+def _parse_athena_struct(s: str) -> dict:
+    """Parse Athena struct CSV string {key=value, key=value} into a plain dict."""
+    if not s or s.strip() in ("", "null"):
+        return {}
+    s = s.strip().lstrip("{").rstrip("}")
+    result = {}
+    for part in s.split(", "):
+        if "=" in part:
+            k, _, v = part.partition("=")
+            result[k.strip()] = _safe_float(v.strip())
+    return result
 
 
 def _to_dynamo(obj):
@@ -349,6 +374,75 @@ def _high_turnover_low_activity_by_dealer(rows: list[dict]) -> dict:
     }
 
 
+def _process_market_basket(rows: list[dict]) -> dict:
+    by_dealer: dict[str, list] = {}
+    for row in rows:
+        dc = row.get("dealer_code", "")
+        if not dc:
+            continue
+        by_dealer.setdefault(dc, []).append({
+            "antecedent_category":      row.get("antecedent_category", ""),
+            "below_benchmark_category": row.get("below_benchmark_category", ""),
+            "country_confidence_pct":   _safe_float(row.get("country_confidence_pct")),
+            "dealer_confidence_pct":    _safe_float(row.get("dealer_confidence_pct")),
+            "confidence_gap_pct":       _safe_float(row.get("confidence_gap_pct")),
+            "dealer_antecedent_baskets": _safe_float(row.get("dealer_antecedent_baskets")),
+            "dealer_joint_baskets":      _safe_float(row.get("dealer_joint_baskets")),
+            "analysis_period_start":    row.get("analysis_period_start", ""),
+            "analysis_period_end_exclusive": row.get("analysis_period_end_exclusive", ""),
+        })
+    total_opps = sum(len(v) for v in by_dealer.values())
+    return {
+        "total_dealers":      len(by_dealer),
+        "total_opportunities": total_opps,
+        "all_dealers": [
+            {"dealer_code": dc, "opportunities": opps}
+            for dc, opps in by_dealer.items()
+        ],
+    }
+
+
+def _process_parts_category_benchmark(rows: list[dict]) -> dict:
+    dealers = []
+    for row in rows:
+        dc = row.get("dealer_code", "")
+        if not dc:
+            continue
+        categories = {cat: _parse_athena_struct(row.get(cat, "")) for cat in BENCHMARK_CATEGORIES}
+        dealers.append({"dealer_code": dc, "country": row.get("country", ""), "categories": categories})
+    return {"total_dealers": len(dealers), "all_dealers": dealers}
+
+
+def _market_basket_by_dealer(rows: list[dict]) -> dict:
+    result: dict[str, list] = {}
+    for row in rows:
+        dc = row.get("dealer_code", "")
+        if not dc:
+            continue
+        result.setdefault(dc, []).append({
+            "antecedent_category":      row.get("antecedent_category", ""),
+            "below_benchmark_category": row.get("below_benchmark_category", ""),
+            "country_confidence_pct":   _safe_float(row.get("country_confidence_pct")),
+            "dealer_confidence_pct":    _safe_float(row.get("dealer_confidence_pct")),
+            "confidence_gap_pct":       _safe_float(row.get("confidence_gap_pct")),
+            "dealer_antecedent_baskets": _safe_float(row.get("dealer_antecedent_baskets")),
+            "dealer_joint_baskets":      _safe_float(row.get("dealer_joint_baskets")),
+            "analysis_period_start":    row.get("analysis_period_start", ""),
+            "analysis_period_end_exclusive": row.get("analysis_period_end_exclusive", ""),
+        })
+    return result
+
+
+def _parts_category_benchmark_by_dealer(rows: list[dict]) -> dict:
+    result = {}
+    for row in rows:
+        dc = row.get("dealer_code", "")
+        if not dc:
+            continue
+        result[dc] = {cat: _parse_athena_struct(row.get(cat, "")) for cat in BENCHMARK_CATEGORIES}
+    return result
+
+
 def _vs_target_by_dealer(rows: list[dict]) -> dict:
     return {
         row["dealer_code"]: {
@@ -370,7 +464,7 @@ def _write_to_dynamodb(
     abc_by_d: dict, mom_by_d: dict, yoy_by_d: dict,
     rev_yoy_by_d: dict, cust_by_d: dict, htla_by_d: dict,
     sales_rvt_by_d: dict, purchase_rvt_by_d: dict,
-    comp_cust_by_d: dict,
+    comp_cust_by_d: dict, mkt_by_d: dict, pcb_by_d: dict,
     run_date: str,
 ):
     table       = dynamo.Table(DEALER_TABLE_NAME)
@@ -378,7 +472,7 @@ def _write_to_dynamodb(
         set(abc_by_d) | set(mom_by_d) | set(yoy_by_d)
         | set(rev_yoy_by_d) | set(cust_by_d) | set(htla_by_d)
         | set(sales_rvt_by_d) | set(purchase_rvt_by_d)
-        | set(comp_cust_by_d)
+        | set(comp_cust_by_d) | set(mkt_by_d) | set(pcb_by_d)
     )
     print(f"[result_aggregator] Writing {len(all_dealers)} dealer items to DynamoDB ({DEALER_TABLE_NAME})")
 
@@ -403,6 +497,8 @@ def _write_to_dynamodb(
                     "sale_revenue_vs_target":     sales_rvt_by_d.get(dc, {}),
                     "purchase_revenue_vs_target": purchase_rvt_by_d.get(dc, {}),
                     "comp_customer_count":        comp_cust_by_d.get(dc, {}),
+                    "market_basket_uk_ir":          mkt_by_d.get(dc, []),
+                    "parts_category_mix_benchmark": pcb_by_d.get(dc, {}),
                 },
             }
             batch.put_item(Item=_to_dynamo(item))
@@ -446,20 +542,24 @@ def lambda_handler(event, context):
         svt_rows   = _rows("sale_revenue_vs_target")
         pvt_rows   = _rows("purchase_revenue_vs_target")
         comp_rows  = _rows("comp_customer_count")
+        mkt_rows   = _rows("market_basket_uk_ir")
+        pcb_rows   = _rows("parts_category_mix_benchmark")
 
         combined = {
-            "processed_at":               datetime.now(timezone.utc).isoformat(),
-            "partial":                    bool(failed_queries),
-            "failed_queries":             failed_queries,
-            "abc_segmentation":           _process_abc(abc_rows)                          if abc_rows   else None,
-            "mom_decline":                _process_mom(mom_rows)                          if mom_rows   else None,
-            "yoy_comparison":             _process_yoy(yoy_rows)                          if yoy_rows   else None,
-            "revenue_yoy":                _process_revenue_yoy(rev_rows)                  if rev_rows   else None,
-            "customer_trend":             _process_customer_trend(cst_rows)               if cst_rows   else None,
-            "high_turnover_low_activity": _process_high_turnover_low_activity(htla_rows)  if htla_rows  else None,
-            "sale_revenue_vs_target":     _process_vs_target(svt_rows)                    if svt_rows   else None,
-            "purchase_revenue_vs_target": _process_vs_target(pvt_rows)                    if pvt_rows   else None,
-            "comp_customer_count":        _process_comp_customer_count(comp_rows)         if comp_rows  else None,
+            "processed_at":                 datetime.now(timezone.utc).isoformat(),
+            "partial":                      bool(failed_queries),
+            "failed_queries":               failed_queries,
+            "abc_segmentation":             _process_abc(abc_rows)                         if abc_rows   else None,
+            "mom_decline":                  _process_mom(mom_rows)                         if mom_rows   else None,
+            "yoy_comparison":               _process_yoy(yoy_rows)                         if yoy_rows   else None,
+            "revenue_yoy":                  _process_revenue_yoy(rev_rows)                 if rev_rows   else None,
+            "customer_trend":               _process_customer_trend(cst_rows)              if cst_rows   else None,
+            "high_turnover_low_activity":   _process_high_turnover_low_activity(htla_rows) if htla_rows  else None,
+            "sale_revenue_vs_target":       _process_vs_target(svt_rows)                   if svt_rows   else None,
+            "purchase_revenue_vs_target":   _process_vs_target(pvt_rows)                   if pvt_rows   else None,
+            "comp_customer_count":          _process_comp_customer_count(comp_rows)        if comp_rows  else None,
+            "market_basket_uk_ir":          _process_market_basket(mkt_rows)               if mkt_rows   else None,
+            "parts_category_mix_benchmark": _process_parts_category_benchmark(pcb_rows)    if pcb_rows   else None,
         }
         payload = json.dumps(combined, ensure_ascii=False)
 
@@ -488,6 +588,8 @@ def lambda_handler(event, context):
             _vs_target_by_dealer(svt_rows)                     if svt_rows   else {},
             _vs_target_by_dealer(pvt_rows)                     if pvt_rows   else {},
             _comp_customer_count_by_dealer(comp_rows)          if comp_rows  else {},
+            _market_basket_by_dealer(mkt_rows)                 if mkt_rows   else {},
+            _parts_category_benchmark_by_dealer(pcb_rows)      if pcb_rows   else {},
             run_date,
         )
 

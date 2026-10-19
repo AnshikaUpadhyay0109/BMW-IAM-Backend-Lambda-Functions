@@ -11,57 +11,198 @@ from shared.config import (
 from shared.utils import success_response, error_response, log_event
 
 SQL_QUERY = """
-WITH latest_month AS (
-    SELECT MAX("month") AS cy_month
-    FROM "dibmw-dev-sellout"."sellout_agg_dealer"
-    WHERE year = EXTRACT(YEAR FROM current_date)
-      AND sales_actual_MTD IS NOT NULL
+WITH last_month AS (
+    SELECT
+        YEAR(date_add('month', -1, CURRENT_DATE)) AS cy_year,
+        MONTH(date_add('month', -1, CURRENT_DATE)) AS cy_month
+),
+
+dealer_sales AS (
+
+    SELECT
+        sd.dealer_code,
+        MAX(dm.dealer_name) AS dealer_name,
+        MAX(dm.country) AS country,
+        MAX(dm.region) AS region,
+        MAX(dm.dealer_city) AS dealer_city,
+
+        ROUND(
+            SUM(
+                CASE
+                    WHEN sd.year = lm.cy_year
+                     AND sd.month = lm.cy_month
+                    THEN COALESCE(sd.sales_actual_MTD, 0)
+                    ELSE 0
+                END
+            ),
+            0
+        ) AS current_year_sales_eur,
+
+        ROUND(
+            SUM(
+                CASE
+                    WHEN sd.year = lm.cy_year - 1
+                     AND sd.month = lm.cy_month
+                    THEN COALESCE(sd.sales_actual_MTD, 0)
+                    ELSE 0
+                END
+            ),
+            0
+        ) AS last_year_sales_eur,
+
+        ROUND(
+            SUM(
+                CASE
+                    WHEN sd.year = lm.cy_year
+                     AND sd.month = lm.cy_month
+                    THEN COALESCE(sd.sales_actual_MTD, 0)
+                    ELSE 0
+                END
+            )
+            -
+            SUM(
+                CASE
+                    WHEN sd.year = lm.cy_year - 1
+                     AND sd.month = lm.cy_month
+                    THEN COALESCE(sd.sales_actual_MTD, 0)
+                    ELSE 0
+                END
+            ),
+            0
+        ) AS sales_gap_eur,
+
+        ROUND(
+            (
+                SUM(
+                    CASE
+                        WHEN sd.year = lm.cy_year
+                         AND sd.month = lm.cy_month
+                        THEN COALESCE(sd.sales_actual_MTD, 0)
+                        ELSE 0
+                    END
+                )
+                -
+                SUM(
+                    CASE
+                        WHEN sd.year = lm.cy_year - 1
+                         AND sd.month = lm.cy_month
+                        THEN COALESCE(sd.sales_actual_MTD, 0)
+                        ELSE 0
+                    END
+                )
+            )
+            /
+            NULLIF(
+                SUM(
+                    CASE
+                        WHEN sd.year = lm.cy_year - 1
+                         AND sd.month = lm.cy_month
+                        THEN COALESCE(sd.sales_actual_MTD, 0)
+                        ELSE 0
+                    END
+                ),
+                0
+            ) * 100,
+            1
+        ) AS sales_growth_decline_pct,
+
+        CASE
+            WHEN
+                SUM(
+                    CASE
+                        WHEN sd.year = lm.cy_year
+                         AND sd.month = lm.cy_month
+                        THEN COALESCE(sd.sales_actual_MTD, 0)
+                        ELSE 0
+                    END
+                )
+                >
+                SUM(
+                    CASE
+                        WHEN sd.year = lm.cy_year - 1
+                         AND sd.month = lm.cy_month
+                        THEN COALESCE(sd.sales_actual_MTD, 0)
+                        ELSE 0
+                    END
+                )
+            THEN 'Growth'
+
+            WHEN
+                SUM(
+                    CASE
+                        WHEN sd.year = lm.cy_year
+                         AND sd.month = lm.cy_month
+                        THEN COALESCE(sd.sales_actual_MTD, 0)
+                        ELSE 0
+                    END
+                )
+                <
+                SUM(
+                    CASE
+                        WHEN sd.year = lm.cy_year - 1
+                         AND sd.month = lm.cy_month
+                        THEN COALESCE(sd.sales_actual_MTD, 0)
+                        ELSE 0
+                    END
+                )
+            THEN 'Decline'
+
+            ELSE 'Flat'
+        END AS sales_performance_tag,
+
+        lm.cy_month AS comparison_month
+
+    FROM "dibmw-dev-sellout"."sellout_agg_dealer" sd
+
+    LEFT JOIN "dibmw-dev-sellout"."dealer_master" dm
+        ON sd.dealer_code = dm.dealer_code
+
+    CROSS JOIN last_month lm
+
+    GROUP BY
+        sd.dealer_code,
+        lm.cy_month
+),
+
+country_ranked AS (
+
+    SELECT
+        ds.*,
+
+        NTILE(3) OVER (
+            PARTITION BY ds.country
+            ORDER BY COALESCE(ds.sales_growth_decline_pct, -999999)
+        ) AS country_growth_bucket
+
+    FROM dealer_sales ds
+
 )
 
 SELECT
-    sd.dealer_code,
-    MAX(dm.dealer_name) AS dealer_name,
+    dealer_code,
+    dealer_name,
+    country,
+    region,
+    dealer_city,
+    current_year_sales_eur,
+    last_year_sales_eur,
+    sales_gap_eur,
+    sales_growth_decline_pct,
+    sales_performance_tag,
+    comparison_month,
 
-    ROUND(
-        SUM(
-            CASE
-                WHEN sd.year = EXTRACT(YEAR FROM current_date)
-                 AND sd."month" = lm.cy_month
-                THEN COALESCE(sd.sales_actual_MTD, 0)
-                ELSE 0
-            END
-        ),
-        0
-    ) AS cy_revenue_eur,
+    CASE
+        WHEN country_growth_bucket = 1 THEN 'Critical'
+        WHEN country_growth_bucket = 2 THEN 'Needs Monitoring'
+        ELSE 'Stable'
+    END AS dealer_health_tag
 
-    ROUND(
-        SUM(
-            CASE
-                WHEN sd.year = EXTRACT(YEAR FROM current_date) - 1
-                 AND sd."month" = lm.cy_month
-                THEN COALESCE(sd.sales_actual_MTD, 0)
-                ELSE 0
-            END
-        ),
-        0
-    ) AS ly_revenue_eur,
+FROM country_ranked
+WHERE region IN ('UK IR')
 
-    lm.cy_month AS lat_month
-
-FROM "dibmw-dev-sellout"."sellout_agg_dealer" sd
-LEFT JOIN "dibmw-dev-sellout"."dealer_master" dm
-    ON sd.dealer_code = dm.dealer_code
-CROSS JOIN latest_month lm
-WHERE sd.dealer_code IN (
-    '21125','11380','35955','33400',
-    '40477','6057','30864','9118',
-    '28965','33160'
-)
-GROUP BY
-    sd.dealer_code,
-    lm.cy_month
-
-ORDER BY cy_revenue_eur DESC;
+ORDER BY
+    country,
+    sales_growth_decline_pct DESC;
 """
 
 athena = boto3.client("athena", region_name=ATHENA_REGION)

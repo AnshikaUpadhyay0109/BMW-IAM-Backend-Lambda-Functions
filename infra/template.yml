@@ -77,7 +77,7 @@ Resources:
       LayerName: !Sub dibmw-shared-${Stage}
       Description: Shared config + utils for all DIBMW Lambda functions
       ContentUri: ../shared/
-      CompatibleRuntimes: [python3.12]
+      CompatibleRuntimes: [python3.13]
       RetentionPolicy: Delete
 
   # ── Function 1: ABC Dealer Segmentation ───────────────────────────────────
@@ -232,6 +232,48 @@ Resources:
               Action: [kms:Decrypt, kms:GenerateDataKey]
               Resource: "*"
 
+  # ── Function: Market Basket UK IR ────────────────────────────────────────
+  MarketBasketUkIrFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub dibmw-market-basket-uk-ir-${Stage}
+      CodeUri: ../functions/market_basket_uk_ir/
+      Handler: handler.lambda_handler
+      Description: Reads market_basket_below_benchmark_uk_ir CTAS table; returns S3 CSV path
+      Policies:
+        - AmazonAthenaFullAccess
+        - S3ReadPolicy:
+            BucketName: !Ref CuratedBucket
+        - S3ReadPolicy:
+            BucketName: !Ref ResultsBucket
+        - S3WritePolicy:
+            BucketName: !Ref ResultsBucket
+        - Statement:
+            - Effect: Allow
+              Action: [kms:Decrypt, kms:GenerateDataKey]
+              Resource: "*"
+
+  # ── Function: Parts Category Mix Benchmark ────────────────────────────────
+  PartsCategoryMixBenchmarkFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub dibmw-parts-category-mix-benchmark-${Stage}
+      CodeUri: ../functions/parts_category_mix_benchmark/
+      Handler: handler.lambda_handler
+      Description: Reads parts_category_mix_benchmark_uk_ir CTAS table; returns S3 CSV path
+      Policies:
+        - AmazonAthenaFullAccess
+        - S3ReadPolicy:
+            BucketName: !Ref CuratedBucket
+        - S3ReadPolicy:
+            BucketName: !Ref ResultsBucket
+        - S3WritePolicy:
+            BucketName: !Ref ResultsBucket
+        - Statement:
+            - Effect: Allow
+              Action: [kms:Decrypt, kms:GenerateDataKey]
+              Resource: "*"
+
   # ── Function 6: Customer Count Trend ─────────────────────────────────────
   CustomerTrendFunction:
     Type: AWS::Serverless::Function
@@ -333,6 +375,8 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref DealerCacheTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref VisitCaptureTable
         - Statement:
             - Effect: Allow
               Action: s3:GetObject
@@ -727,6 +771,28 @@ Resources:
                         IntervalSeconds: 5
                         MaxAttempts: 2
                         BackoffRate: 2
+              - StartAt: MarketBasketUkIr
+                States:
+                  MarketBasketUkIr:
+                    Type: Task
+                    Resource: !GetAtt MarketBasketUkIrFunction.Arn
+                    End: true
+                    Retry:
+                      - ErrorEquals: [States.TaskFailed]
+                        IntervalSeconds: 5
+                        MaxAttempts: 2
+                        BackoffRate: 2
+              - StartAt: PartsCategoryMixBenchmark
+                States:
+                  PartsCategoryMixBenchmark:
+                    Type: Task
+                    Resource: !GetAtt PartsCategoryMixBenchmarkFunction.Arn
+                    End: true
+                    Retry:
+                      - ErrorEquals: [States.TaskFailed]
+                        IntervalSeconds: 5
+                        MaxAttempts: 2
+                        BackoffRate: 2
             # Output: ordered array of branch results → input to ResultAggregator
             Catch:
               - ErrorEquals: [States.ALL]
@@ -784,6 +850,10 @@ Resources:
             FunctionName: !Ref PurchaseRevenueVsTargetFunction
         - LambdaInvokePolicy:
             FunctionName: !Ref CompCustomerCountFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref MarketBasketUkIrFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref PartsCategoryMixBenchmarkFunction
         - LambdaInvokePolicy:
             FunctionName: !Ref ResultAggregatorFunction
         - LambdaInvokePolicy:
