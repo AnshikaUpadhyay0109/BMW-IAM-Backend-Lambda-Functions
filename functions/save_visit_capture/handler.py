@@ -27,14 +27,18 @@ def lambda_handler(event, context):
         raw_body = event.get("body") or "{}"
         body = json.loads(raw_body) if isinstance(raw_body, str) else raw_body
 
+        item = {
+            "dealer_code": dealer_code,
+            "visit_id": visit_id,
+            **body,
+        }
+        # recommendation_id (optional) links this visit to an AI-generated recommendation/pitch
+        recommendation_id = body.get("recommendation_id")
+        if recommendation_id is not None:
+            item["recommendation_id"] = recommendation_id
+
         table = dynamo.Table(VISIT_CAPTURE_TABLE_NAME)
-        table.put_item(
-            Item={
-                "dealer_code": dealer_code,
-                "visit_id": visit_id,
-                **body,
-            }
-        )
+        table.put_item(Item=item)
 
         if body.get("status") == "submitted":
             try:

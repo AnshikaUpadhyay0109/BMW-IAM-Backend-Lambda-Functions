@@ -65,6 +65,7 @@ def lambda_handler(event, context):
         visit = _sanitize({
             "visit_id": item.get("visit_id"),
             "form_data": item.get("form_data"),
+            "recommendation_id": item.get("recommendation_id"),
         })
 
         return {
